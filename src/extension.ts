@@ -46,6 +46,7 @@ import {
 	registerCodeActions,
 	registerTerminalActions,
 	CodeActionProvider,
+	discoverPlugins,
 } from "./activate"
 import { initializeI18n } from "./i18n"
 import { flushModels, initializeModelCacheRefresh, refreshModels } from "./api/providers/fetchers/modelCache"
@@ -417,7 +418,14 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Initialize background model cache refresh
 	initializeModelCacheRefresh()
 
-	return new API(outputChannel, provider, socketPath, enableLogging)
+	const api = new API(outputChannel, provider, socketPath, enableLogging)
+
+	// Discover and register third-party plugins.
+	// The returned disposable tracks the onDidChange watcher.
+	const pluginDiscoveryDisposable = discoverPlugins(api.plugins, outputChannel)
+	context.subscriptions.push(pluginDiscoveryDisposable)
+
+	return api
 }
 
 // This method is called when your extension is deactivated.

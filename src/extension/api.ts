@@ -14,6 +14,7 @@ import {
 	type ProviderSettingsEntry,
 	type TaskEvent,
 	type CreateTaskOptions,
+	type RooPluginService,
 	RooCodeEventName,
 	TaskCommandName,
 	isSecretStateKey,
@@ -28,6 +29,7 @@ import { ClineProvider } from "../core/webview/ClineProvider"
 import { openClineInNewTab } from "../activate/registerCommands"
 import { getCommands } from "../services/command/commands"
 import { getModels } from "../api/providers/fetchers/modelCache"
+import { RooPluginServiceImpl } from "../services/plugin/RooPluginService"
 
 export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 	private readonly outputChannel: vscode.OutputChannel
@@ -36,6 +38,8 @@ export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 	private readonly ipc?: IpcServer
 	private readonly log: (...args: unknown[]) => void
 	private logfile?: string
+
+	public readonly plugins: RooPluginService
 
 	constructor(
 		outputChannel: vscode.OutputChannel,
@@ -48,6 +52,7 @@ export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 		this.outputChannel = outputChannel
 		this.sidebarProvider = provider
 		this.context = provider.context
+		this.plugins = new RooPluginServiceImpl(this)
 
 		if (enableLogging) {
 			this.log = (...args: unknown[]) => {

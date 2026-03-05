@@ -5,6 +5,7 @@ import type { RooCodeEvents } from "./events.js"
 import type { RooCodeSettings } from "./global-settings.js"
 import type { ProviderSettingsEntry, ProviderSettings } from "./provider-settings.js"
 import type { IpcMessage, IpcServerEvents } from "./ipc.js"
+import type { RooPluginService } from "./plugin.js"
 
 export type RooCodeAPIEvents = RooCodeEvents
 
@@ -133,6 +134,11 @@ export interface RooCodeAPI extends EventEmitter<RooCodeAPIEvents> {
 	 * @throws Error if the profile does not exist
 	 */
 	setActiveProfile(name: string): Promise<string | undefined>
+
+	/**
+	 * Plugin service for registering and managing third-party extensions.
+	 */
+	readonly plugins: RooPluginService
 }
 
 export interface RooCodeIpcServer extends EventEmitter<IpcServerEvents> {
