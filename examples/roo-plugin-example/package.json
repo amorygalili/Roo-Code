@@ -22,10 +22,23 @@
 			"displayName": "Roo Plugin Example",
 			"description": "Example plugin that adds utilities and shows live agent context."
 		},
+		"views": {
+			"roo-cline-ActivityBar": [
+				{
+					"type": "webview",
+					"id": "roo-plugin-example.panel",
+					"name": "Roo Plugin Demo"
+				}
+			]
+		},
 		"commands": [
 			{
 				"command": "roo-plugin-example.askDateTime",
 				"title": "Roo: Ask Agent for Current Date & Time"
+			},
+			{
+				"command": "roo-plugin-example.pingPanel",
+				"title": "Roo Plugin: Ping Panel from Extension Host"
 			}
 		]
 	},

@@ -1,12 +1,16 @@
 # Roo Plugin Example
 
-A minimal VS Code extension that demonstrates the three core features of the Roo Code plugin API:
+A VS Code extension that demonstrates all major Roo Code plugin API features inside a **sidebar panel UI** (plus a status bar item as a secondary display).
 
-| Feature                  | What it does                                                             |
-| ------------------------ | ------------------------------------------------------------------------ |
-| **Tool registration**    | Adds `word_count` and `get_datetime` tools the agent can call            |
-| **Context subscription** | Shows a live status bar item reflecting the current mode and active task |
-| **Agent messaging**      | Provides a command that sends a message directly to the active task      |
+| Feature                  | Where it shows up                                                              |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| **Tool registration**    | `word_count` and `get_datetime` tools available to the agent                   |
+| **Context subscription** | Live mode / task ID / workspace / open-files display in the panel + status bar |
+| **Token usage tracking** | Cumulative token counts and cost, updated in real time in the panel            |
+| **Tool failure alerts**  | Failed tool invocations logged in the panel and shown as VS Code notifications |
+| **Agent message stream** | Live assistant transcript rendered in the panel                                |
+| **Panel message bus**    | Bidirectional ping/pong between the panel webview and extension host           |
+| **Agent messaging**      | Panel textarea and "Ask Date & Time" button send messages to the active task   |
 
 ---
 
@@ -46,47 +50,72 @@ npm run compile
     > Roo Code to be installed in your normal VS Code profile.
 
 3. In the Extension Development Host window, verify the plugin activated:
-    - A notification appears: _"Roo Plugin Example activated — tools and status bar are live."_
+    - A notification appears: _"Roo Plugin Example activated — open the 'Roo Plugin Demo' panel in the Roo sidebar."_
     - A `$(robot) Roo [code] idle` item appears in the bottom-right status bar.
+    - A **"Roo Plugin Demo"** section appears inside the Roo sidebar (click the Roo icon in the Activity Bar).
 
 ---
 
-## Testing each feature
+## Testing each feature in the panel
 
-### 1. Status bar — context subscription
+Open the **Roo Plugin Demo** panel by clicking the Roo icon in the Activity Bar and expanding the "Roo Plugin Demo" section.
 
-The status bar item updates automatically as the agent state changes.
+### 1. Context subscription
 
-- **Start a Roo task** (open the Roo sidebar and send any message).  
-  → The status bar changes from `idle` to `task:<taskId prefix>`.
-- **Switch mode** (e.g. to `architect`).  
-  → The mode label in the status bar updates immediately.
-- **End the task**.  
-  → The status bar returns to `idle`.
+The **Context** section of the panel (and the status bar item) update automatically:
+
+- **Start a Roo task** → Task ID appears and mode is shown.
+- **Switch mode** → Mode pill updates immediately.
+- **Open or close files** → Open Files list refreshes.
+- **End the task** → Task reverts to `idle`.
 
 ### 2. Custom tools — `word_count` and `get_datetime`
 
-With a task active, ask the agent to use the registered tools:
+With a task active, ask the agent to use the registered tools via the Roo chat:
 
-> _"Use the word_count tool on the text 'hello world foo bar'."_
+> _"Use the word_count tool on the text 'hello world foo bar'."_ > _"Use the get_datetime tool to tell me the current time."_
 
-> _"Use the get_datetime tool to tell me the current time."_
-
-The agent will invoke the tool and return the result. Tool names are automatically
-namespaced by the service, so the agent sees them as:
+The agent will invoke the tool and return the result. Tool names are namespaced:
 
 - `example.roo-plugin-example/word_count`
 - `example.roo-plugin-example/get_datetime`
 
-### 3. Agent messaging — command
+### 3. Token usage
 
-1. Start a Roo task so there is an active task ID.
-2. Open the **Command Palette** (`Ctrl+Shift+P` / `Cmd+Shift+P`).
-3. Run **"Roo: Ask Agent for Current Date & Time"**.  
-   → The extension calls `handle.sendMessageToAgent(...)`, and the agent responds
-   as if you had typed the message yourself.
+Every time the agent makes an LLM request the **Token Usage** section updates live with token counts and accumulated cost. The status bar also shows the running cost (`· $0.0123`).
 
-If no task is active, the command shows an info notification instead of sending.
+### 4. Tool failure alerts
+
+If a tool invocation fails, the failure is shown in the **Tool Failures** section of the panel and as a VS Code warning notification.
+
+### 5. Agent message stream
+
+The **Agent Messages** section shows a live, scrollable transcript of the assistant's replies. Only final (non-partial) `say/text` messages are rendered. Click **Clear** to reset the log.
+
+### 6. Send to Agent — panel textarea
+
+1. Start a Roo task.
+2. Type any message in the **Send to Agent** textarea.
+3. Press **Send** (or `Ctrl+Enter` / `Cmd+Enter`).
+   → The extension calls `handle.sendMessageToAgent(...)` and the agent responds as if you had typed in the Roo chat directly.
+
+Click **Ask Date & Time** to fire a pre-canned message without typing.
+
+The same action is also available via the Command Palette: **"Roo: Ask Agent for Current Date & Time"**.
+
+### 7. Panel message bus — ping/pong
+
+**Panel → Extension Host:**
+
+1. Click **Ping Extension Host** in the **Panel Message Bus** section.
+2. The extension host receives the ping, logs it to the _Roo Plugin Example_ output channel, and sends a pong back.
+3. The panel shows the round-trip time: `🏓 Pong from extension host — round-trip N ms`.
+
+**Extension Host → Panel:**
+
+1. Open the Command Palette and run **"Roo Plugin: Ping Panel from Extension Host"**.
+2. The panel receives the ping, displays the latency, and posts a pong back to the host.
+3. The round-trip is logged in the output channel.
 
 ---
 
@@ -94,10 +123,10 @@ If no task is active, the command shows an info notification instead of sending.
 
 ```
 examples/roo-plugin-example/
-├── package.json        # Extension manifest; contributes["roo-code"] enables auto-discovery
+├── package.json        # Extension manifest: view contribution, commands, roo-code auto-discovery
 ├── tsconfig.json       # TypeScript config (CommonJS output)
 └── src/
-    └── extension.ts    # activate() wires up all three plugin features
+    └── extension.ts    # activate() — tools, panel provider, event forwarding, message handling
 ```
 
 ### Key points in `package.json`
@@ -109,10 +138,23 @@ examples/roo-plugin-example/
 Ensures this plugin activates only after Roo Code has finished its own activation.
 
 ```jsonc
-"extensionDependencies": ["roo-cline.roo-cline"],
+"extensionDependencies": ["RooVeterinaryInc.roo-cline"],
 ```
 
 Guarantees Roo Code is active before `activate()` runs, so `rooExt.exports` is always available.
+
+```jsonc
+"contributes": {
+  "views": {
+    "roo-cline-ActivityBar": [
+      { "type": "webview", "id": "roo-plugin-example.panel", "name": "Roo Plugin Demo" }
+    ]
+  }
+}
+```
+
+Adds the **"Roo Plugin Demo"** webview panel to Roo's own sidebar using VS Code's native
+`contributes.views` mechanism — no changes to Roo Code's source required.
 
 ```jsonc
 "contributes": { "roo-code": { ... } }

@@ -7,9 +7,14 @@ import type {
 	RooPluginManifest,
 	RooTaskContext,
 	RooDisposable,
+	RooWebviewView,
 	CustomToolDefinition,
 	RooCodeAPI,
 	RooCodeEvents,
+	TokenUsage,
+	ToolUsage,
+	ToolName,
+	ClineMessage,
 } from "@roo-code/types"
 import { RooCodeEventName } from "@roo-code/types"
 
@@ -36,6 +41,11 @@ class RooPluginHandleImpl implements RooPluginHandle {
 	private readonly _service: RooPluginServiceImpl
 	private readonly _disposables: RooDisposable[] = []
 	private _disposed = false
+
+	// Phase 4: panel view state
+	private _panelView: RooWebviewView | undefined = undefined
+	private readonly _panelListeners = new Set<(message: unknown) => void>()
+	private _panelViewDisposable: RooDisposable | undefined = undefined
 
 	constructor(manifest: RooPluginManifest, service: RooPluginServiceImpl) {
 		this.manifest = manifest
@@ -78,6 +88,71 @@ class RooPluginHandleImpl implements RooPluginHandle {
 		return disposable
 	}
 
+	onTokenUsageUpdated(
+		listener: (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void,
+	): RooDisposable {
+		return this._service.subscribeToTokenUsageUpdated(listener)
+	}
+
+	onToolFailed(listener: (taskId: string, toolName: ToolName, errorMessage: string) => void): RooDisposable {
+		return this._service.subscribeToToolFailed(listener)
+	}
+
+	// ── Phase 4: Plugin Panel Message Bus ──────────────────────────────────
+
+	registerPanelView(view: RooWebviewView): RooDisposable {
+		// Detach any previously registered view.
+		this._panelViewDisposable?.dispose()
+
+		this._panelView = view
+
+		// Wire incoming messages from the webview to all panel listeners.
+		const msgDisposable = view.webview.onDidReceiveMessage((message) => {
+			for (const listener of this._panelListeners) {
+				try {
+					listener(message)
+				} catch {
+					// Isolate plugin errors.
+				}
+			}
+		})
+
+		const disposable: RooDisposable = {
+			dispose: () => {
+				msgDisposable.dispose()
+				if (this._panelView === view) {
+					this._panelView = undefined
+				}
+				this._panelViewDisposable = undefined
+			},
+		}
+
+		this._panelViewDisposable = disposable
+		this._disposables.push(disposable)
+		return disposable
+	}
+
+	async postMessageToPanel(message: unknown): Promise<void> {
+		await this._panelView?.webview.postMessage(message)
+	}
+
+	onMessageFromPanel(listener: (message: unknown) => void): RooDisposable {
+		this._panelListeners.add(listener)
+		return {
+			dispose: () => {
+				this._panelListeners.delete(listener)
+			},
+		}
+	}
+
+	// ── Phase 5: Agent Communication ────────────────────────────────────────
+
+	onAgentMessage(
+		listener: (taskId: string, action: "created" | "updated", message: ClineMessage) => void,
+	): RooDisposable {
+		return this._service.subscribeToAgentMessages(listener)
+	}
+
 	dispose(): void {
 		if (this._disposed) {
 			return
@@ -105,6 +180,15 @@ export class RooPluginServiceImpl implements RooPluginService {
 	public readonly api: RooCodeAPI
 	private readonly _handles = new Map<string, RooPluginHandleImpl>()
 	private readonly _contextListeners = new Set<(ctx: RooTaskContext) => void>()
+	private readonly _tokenUsageListeners = new Set<
+		(taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void
+	>()
+	private readonly _toolFailedListeners = new Set<
+		(taskId: string, toolName: ToolName, errorMessage: string) => void
+	>()
+	private readonly _agentMessageListeners = new Set<
+		(taskId: string, action: "created" | "updated", message: ClineMessage) => void
+	>()
 	private _context: RooTaskContext = makeContext()
 	private readonly _disposables: RooDisposable[] = []
 
@@ -152,6 +236,37 @@ export class RooPluginServiceImpl implements RooPluginService {
 		}
 	}
 
+	subscribeToTokenUsageUpdated(
+		listener: (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void,
+	): RooDisposable {
+		this._tokenUsageListeners.add(listener)
+		return {
+			dispose: () => {
+				this._tokenUsageListeners.delete(listener)
+			},
+		}
+	}
+
+	subscribeToToolFailed(listener: (taskId: string, toolName: ToolName, errorMessage: string) => void): RooDisposable {
+		this._toolFailedListeners.add(listener)
+		return {
+			dispose: () => {
+				this._toolFailedListeners.delete(listener)
+			},
+		}
+	}
+
+	subscribeToAgentMessages(
+		listener: (taskId: string, action: "created" | "updated", message: ClineMessage) => void,
+	): RooDisposable {
+		this._agentMessageListeners.add(listener)
+		return {
+			dispose: () => {
+				this._agentMessageListeners.delete(listener)
+			},
+		}
+	}
+
 	unregister(pluginId: string): void {
 		this._handles.delete(pluginId)
 	}
@@ -186,25 +301,73 @@ export class RooPluginServiceImpl implements RooPluginService {
 	}
 
 	private _wireEvents(): void {
-		// Task lifecycle — update taskId.
+		// Task lifecycle — update taskId and reset per-task usage stats.
 		const onTaskStarted = (taskId: string) => {
-			this._context = { ...this._context, taskId }
+			this._context = { ...this._context, taskId, tokenUsage: undefined, toolUsage: undefined }
 			this._notifyListeners()
 		}
 
 		const onTaskEnded = (_taskId: string) => {
-			this._context = { ...this._context, taskId: undefined }
+			this._context = { ...this._context, taskId: undefined, tokenUsage: undefined, toolUsage: undefined }
 			this._notifyListeners()
 		}
 
+		// TaskModeSwitched fires when the agent switches mode during a task.
 		const onModeSwitch = (_taskId: string, mode: string) => {
 			this._context = { ...this._context, mode }
 			this._notifyListeners()
 		}
 
-		// VS Code workspace change listener.
+		// ModeChanged fires when the user changes mode in the settings UI (outside a task).
+		const onModeChanged = (mode: string) => {
+			this._context = { ...this._context, mode }
+			this._notifyListeners()
+		}
+
+		// TokenUsageUpdated fires after each LLM request with cumulative counts.
+		const onTokenUsageUpdated = (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => {
+			this._context = { ...this._context, tokenUsage, toolUsage }
+			this._notifyListeners()
+			for (const listener of this._tokenUsageListeners) {
+				try {
+					listener(taskId, tokenUsage, toolUsage)
+				} catch {
+					// Isolate plugin errors.
+				}
+			}
+		}
+
+		// ToolFailed fires when a tool invocation fails inside the active task.
+		const onToolFailed = (taskId: string, toolName: ToolName, errorMessage: string) => {
+			for (const listener of this._toolFailedListeners) {
+				try {
+					listener(taskId, toolName, errorMessage)
+				} catch {
+					// Isolate plugin errors.
+				}
+			}
+		}
+
+		// Message fires for every agent message (say/ask) created or updated.
+		const onAgentMessage = (payload: { taskId: string; action: "created" | "updated"; message: ClineMessage }) => {
+			const { taskId, action, message } = payload
+			for (const listener of this._agentMessageListeners) {
+				try {
+					listener(taskId, action, message)
+				} catch {
+					// Isolate plugin errors.
+				}
+			}
+		}
+
+		// VS Code workspace change listeners.
 		const workspaceDisposable = vscode.workspace.onDidChangeWorkspaceFolders(() => {
-			this._context = makeContext({ taskId: this._context.taskId, mode: this._context.mode })
+			this._context = makeContext({
+				taskId: this._context.taskId,
+				mode: this._context.mode,
+				tokenUsage: this._context.tokenUsage,
+				toolUsage: this._context.toolUsage,
+			})
 			this._notifyListeners()
 		})
 
@@ -227,6 +390,10 @@ export class RooPluginServiceImpl implements RooPluginService {
 		emitter.on(RooCodeEventName.TaskCompleted, onTaskEnded as (...args: unknown[]) => void)
 		emitter.on(RooCodeEventName.TaskAborted, onTaskEnded as (...args: unknown[]) => void)
 		emitter.on(RooCodeEventName.TaskModeSwitched, onModeSwitch as (...args: unknown[]) => void)
+		emitter.on(RooCodeEventName.ModeChanged, onModeChanged as (...args: unknown[]) => void)
+		emitter.on(RooCodeEventName.TaskTokenUsageUpdated, onTokenUsageUpdated as (...args: unknown[]) => void)
+		emitter.on(RooCodeEventName.TaskToolFailed, onToolFailed as (...args: unknown[]) => void)
+		emitter.on(RooCodeEventName.Message, onAgentMessage as (...args: unknown[]) => void)
 
 		this._disposables.push(
 			{
@@ -235,6 +402,13 @@ export class RooPluginServiceImpl implements RooPluginService {
 					emitter.off(RooCodeEventName.TaskCompleted, onTaskEnded as (...args: unknown[]) => void)
 					emitter.off(RooCodeEventName.TaskAborted, onTaskEnded as (...args: unknown[]) => void)
 					emitter.off(RooCodeEventName.TaskModeSwitched, onModeSwitch as (...args: unknown[]) => void)
+					emitter.off(RooCodeEventName.ModeChanged, onModeChanged as (...args: unknown[]) => void)
+					emitter.off(
+						RooCodeEventName.TaskTokenUsageUpdated,
+						onTokenUsageUpdated as (...args: unknown[]) => void,
+					)
+					emitter.off(RooCodeEventName.TaskToolFailed, onToolFailed as (...args: unknown[]) => void)
+					emitter.off(RooCodeEventName.Message, onAgentMessage as (...args: unknown[]) => void)
 				},
 			},
 			{ dispose: () => workspaceDisposable.dispose() },

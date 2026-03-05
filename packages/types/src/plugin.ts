@@ -1,10 +1,28 @@
 import type { CustomToolDefinition } from "./custom-tool.js"
+import type { ClineMessage, TokenUsage } from "./message.js"
+import type { ToolName, ToolUsage } from "./tool.js"
 
 /**
  * Minimal disposable interface (mirrors vscode.Disposable without the dependency).
  */
 export interface RooDisposable {
 	dispose(): void
+}
+
+/**
+ * Structural interface matching the shape of `vscode.Webview` for the subset of
+ * members used by the plugin panel bus (avoids a hard dependency on the `vscode` module).
+ */
+export interface RooWebview {
+	postMessage(message: unknown): Promise<boolean>
+	onDidReceiveMessage(listener: (message: unknown) => void): RooDisposable
+}
+
+/**
+ * Structural interface matching the shape of `vscode.WebviewView`.
+ */
+export interface RooWebviewView {
+	readonly webview: RooWebview
 }
 
 /**
@@ -20,6 +38,16 @@ export interface RooTaskContext {
 	workspaceFolders: string[]
 	/** Paths of files currently open in the editor. */
 	openFiles: string[]
+	/**
+	 * Cumulative token usage for the active task.
+	 * Updated live as the task runs; undefined when no task is active.
+	 */
+	tokenUsage?: TokenUsage
+	/**
+	 * Cumulative tool usage for the active task.
+	 * Updated live as the task runs; undefined when no task is active.
+	 */
+	toolUsage?: ToolUsage
 }
 
 /**
@@ -75,6 +103,66 @@ export interface RooPluginHandle extends RooDisposable {
 	 * @returns A disposable that unregisters the tool when disposed.
 	 */
 	registerTool(definition: CustomToolDefinition): RooDisposable
+
+	/**
+	 * Subscribe to live token/tool usage updates for the active task.
+	 * Called each time the agent reports new token counts (roughly after each LLM request).
+	 *
+	 * @returns A disposable to unsubscribe.
+	 */
+	onTokenUsageUpdated(listener: (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void): RooDisposable
+
+	/**
+	 * Subscribe to tool-failure events.
+	 * Called whenever a tool invocation fails inside the active task.
+	 *
+	 * @returns A disposable to unsubscribe.
+	 */
+	onToolFailed(listener: (taskId: string, toolName: ToolName, errorMessage: string) => void): RooDisposable
+
+	// ── Phase 4: Plugin Panel Message Bus ────────────────────────────────────
+
+	/**
+	 * Register a webview view (sidebar panel or editor panel) with this plugin's handle.
+	 * Call this inside your `WebviewViewProvider.resolveWebviewView()` implementation.
+	 * Once registered, `postMessageToPanel` and `onMessageFromPanel` become active.
+	 *
+	 * @param view - The `vscode.WebviewView` handed to you by VS Code.
+	 * @returns A disposable that unregisters the view.
+	 */
+	registerPanelView(view: RooWebviewView): RooDisposable
+
+	/**
+	 * Post a message to the plugin's registered webview panel.
+	 * No-op if no panel view has been registered yet.
+	 *
+	 * @param message - Any JSON-serialisable value.
+	 */
+	postMessageToPanel(message: unknown): Promise<void>
+
+	/**
+	 * Subscribe to messages sent by the plugin's webview panel via `acquireVsCodeApi().postMessage()`.
+	 * No-op (returns a no-op disposable) if no panel view has been registered yet;
+	 * listeners registered before `registerPanelView` are attached automatically once the view arrives.
+	 *
+	 * @returns A disposable to unsubscribe.
+	 */
+	onMessageFromPanel(listener: (message: unknown) => void): RooDisposable
+
+	// ── Phase 5: Agent Communication ─────────────────────────────────────────
+
+	/**
+	 * Subscribe to messages emitted by the agent during any active task.
+	 * The listener receives the raw `ClineMessage` (which includes `type`, `say`, `ask`, `text`, etc.)
+	 * together with the `taskId` and whether the message was `"created"` or `"updated"`.
+	 *
+	 * Useful for logging, external syncing, or driving custom UI that mirrors the conversation.
+	 *
+	 * @returns A disposable to unsubscribe.
+	 */
+	onAgentMessage(
+		listener: (taskId: string, action: "created" | "updated", message: ClineMessage) => void,
+	): RooDisposable
 }
 
 /**
