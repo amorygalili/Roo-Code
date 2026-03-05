@@ -1,0 +1,41 @@
+{
+	"name": "roo-plugin-example",
+	"displayName": "Roo Plugin Example",
+	"description": "Demonstrates the Roo Code plugin API: tool registration, context subscription, and agent messaging.",
+	"version": "0.0.1",
+	"publisher": "example",
+	"engines": {
+		"vscode": "^1.95.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"onCommand:roo-cline.activationCompleted"
+	],
+	"extensionDependencies": [
+		"RooVeterinaryInc.roo-cline"
+	],
+	"main": "./out/extension.js",
+	"contributes": {
+		"roo-code": {
+			"displayName": "Roo Plugin Example",
+			"description": "Example plugin that adds utilities and shows live agent context."
+		},
+		"commands": [
+			{
+				"command": "roo-plugin-example.askDateTime",
+				"title": "Roo: Ask Agent for Current Date & Time"
+			}
+		]
+	},
+	"scripts": {
+		"compile": "tsc -p tsconfig.json",
+		"watch": "tsc -watch -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/vscode": "^1.95.0",
+		"@types/node": "20.x",
+		"typescript": "^5.7.0"
+	}
+}

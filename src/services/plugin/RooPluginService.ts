@@ -118,8 +118,12 @@ export class RooPluginServiceImpl implements RooPluginService {
 	// -------------------------------------------------------------------------
 
 	register(manifest: RooPluginManifest): RooPluginHandle {
-		if (this._handles.has(manifest.id)) {
-			throw new Error(`Plugin "${manifest.id}" is already registered with Roo Code.`)
+		// Idempotent: if the plugin was already registered (e.g. via declarative
+		// auto-discovery in discoverPlugins), return the existing handle so that
+		// extensions which call register() in their activate() don't get an error.
+		const existing = this._handles.get(manifest.id)
+		if (existing) {
+			return existing
 		}
 
 		const handle = new RooPluginHandleImpl(manifest, this)

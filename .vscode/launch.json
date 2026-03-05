@@ -24,6 +24,29 @@
 				"group": "tasks",
 				"order": 1
 			}
+		},
+		{
+			"name": "Run Roo Plugin Example",
+			"type": "extensionHost",
+			"request": "launch",
+			"args": [
+				"--extensionDevelopmentPath=${workspaceFolder}/src",
+				"--extensionDevelopmentPath=${workspaceFolder}/examples/roo-plugin-example"
+			],
+			"sourceMaps": true,
+			"outFiles": [
+				"${workspaceFolder}/src/dist/**/*.js",
+				"${workspaceFolder}/examples/roo-plugin-example/out/**/*.js"
+			],
+			"env": {
+				"NODE_ENV": "development"
+			},
+			"resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
+			"presentation": {
+				"hidden": false,
+				"group": "tasks",
+				"order": 2
+			}
 		}
 	]
 }
