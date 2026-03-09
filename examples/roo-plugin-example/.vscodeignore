@@ -1,0 +1,21 @@
+# Exclude development artifacts that should not be in the VSIX package.
+
+# Root build inputs (compiled output lives in out/)
+src/**
+tsconfig.json
+
+# Webview UI – only the built dist/ folder is needed at runtime
+webview-ui/src/**
+webview-ui/index.html
+webview-ui/vite.config.ts
+webview-ui/tsconfig.json
+webview-ui/package.json
+webview-ui/package-lock.json
+webview-ui/node_modules/**
+
+# General
+node_modules/**
+.vscode/**
+bin/**
+*.vsix
+

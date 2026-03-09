@@ -43,10 +43,11 @@
 		]
 	},
 	"scripts": {
+		"build:webview-ui": "pnpm --dir webview-ui run build",
 		"compile": "tsc -p tsconfig.json",
 		"watch": "tsc -watch -p tsconfig.json",
 		"prepackage": "node -e \"require('fs').mkdirSync('bin', {recursive: true})\"",
-		"package": "npm run compile && vsce package --no-dependencies --allow-missing-repository --out bin/roo-plugin-example-0.0.1.vsix"
+		"package": "pnpm run build:webview-ui && pnpm run compile && vsce package --no-dependencies --allow-missing-repository --out bin/roo-plugin-example-0.0.1.vsix"
 	},
 	"devDependencies": {
 		"@types/node": "20.x",

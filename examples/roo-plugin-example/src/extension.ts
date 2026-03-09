@@ -85,6 +85,18 @@ interface RooCodeAPI {
 // ── Panel UI ─────────────────────────────────────────────────────────────────
 
 /**
+ * Generates a random nonce string for use in Content-Security-Policy headers.
+ */
+function getNonce(): string {
+	let text = ""
+	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+	for (let i = 0; i < 32; i++) {
+		text += chars.charAt(Math.floor(Math.random() * chars.length))
+	}
+	return text
+}
+
+/**
  * Registers the "Roo Plugin Demo" sidebar panel and wires it into the Roo
  * plugin message bus so every event (context, tokens, failures, agent messages)
  * is forwarded from the extension host to the webview automatically.
@@ -94,6 +106,7 @@ class RooPluginPanelProvider implements vscode.WebviewViewProvider {
 	private _view?: vscode.WebviewView
 
 	constructor(
+		private readonly _extensionUri: vscode.Uri,
 		private readonly _handle: RooPluginHandle,
 		private readonly _outputChannel: vscode.OutputChannel,
 	) {}
@@ -104,8 +117,11 @@ class RooPluginPanelProvider implements vscode.WebviewViewProvider {
 		_token: vscode.CancellationToken,
 	) {
 		this._view = webviewView
-		webviewView.webview.options = { enableScripts: true }
-		webviewView.webview.html = getWebviewContent()
+		webviewView.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [vscode.Uri.joinPath(this._extensionUri, "webview-ui", "dist")],
+		}
+		webviewView.webview.html = getWebviewContent(webviewView.webview, this._extensionUri)
 
 		// Hook this view into the Roo plugin panel message bus so that
 		// handle.postMessageToPanel() / handle.onMessageFromPanel() work.
@@ -122,118 +138,32 @@ class RooPluginPanelProvider implements vscode.WebviewViewProvider {
 
 // ── Webview HTML ──────────────────────────────────────────────────────────────
 
-function getWebviewContent(): string {
+/**
+ * Returns the HTML shell that loads the Vite-built React app from
+ * `webview-ui/dist/`. The extension host converts the asset paths to
+ * webview-safe URIs via `webview.asWebviewUri`.
+ */
+function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+	const scriptUri = webview.asWebviewUri(
+		vscode.Uri.joinPath(extensionUri, "webview-ui", "dist", "assets", "index.js"),
+	)
+	const styleUri = webview.asWebviewUri(
+		vscode.Uri.joinPath(extensionUri, "webview-ui", "dist", "assets", "index.css"),
+	)
+	const nonce = getNonce()
+
 	return /* html */ `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>Roo Plugin Demo</title><style>
-body{font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);color:var(--vscode-foreground);background:var(--vscode-sideBar-background,var(--vscode-editor-background));padding:0 8px 16px;margin:0}
-section{margin-bottom:12px}
-h3{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--vscode-sideBarSectionHeader-foreground,var(--vscode-foreground));border-bottom:1px solid var(--vscode-panel-border,#333);padding-bottom:4px;margin:12px 0 6px}
-.kv{display:flex;gap:8px;margin-bottom:3px;font-size:12px}
-.key{color:var(--vscode-descriptionForeground);min-width:70px;flex-shrink:0}
-.pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;background:var(--vscode-statusBarItem-remoteBackground,#007acc);color:var(--vscode-statusBarItem-remoteForeground,#fff)}
-#messageLog,#failureLog{max-height:120px;overflow-y:auto;background:var(--vscode-input-background);border:1px solid var(--vscode-input-border,#333);border-radius:3px;padding:4px 6px;font-size:11px;font-family:var(--vscode-editor-font-family,monospace);margin-bottom:4px}
-.msg-line{margin-bottom:2px;line-height:1.4;color:var(--vscode-charts-blue,#4fc3f7);word-break:break-word}
-.failure-line{color:var(--vscode-errorForeground,#f44);margin-bottom:2px;word-break:break-word}
-.dim{color:var(--vscode-descriptionForeground);font-style:italic}
-textarea{width:100%;height:52px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,#555);border-radius:3px;padding:4px;font-family:inherit;font-size:inherit;resize:vertical;box-sizing:border-box}
-textarea:focus{outline:1px solid var(--vscode-focusBorder);border-color:var(--vscode-focusBorder)}
-button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:3px;padding:4px 10px;font-size:12px;cursor:pointer;margin-right:6px;margin-top:4px}
-button:hover{background:var(--vscode-button-hoverBackground)}
-button.sec{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
-button.sec:hover{background:var(--vscode-button-secondaryHoverBackground)}
-#pingStatus,#sendStatus{font-size:11px;color:var(--vscode-descriptionForeground);margin-top:4px}
-</style></head>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource}; font-src ${webview.cspSource}; img-src ${webview.cspSource} data:;">
+  <link rel="stylesheet" href="${styleUri}" />
+  <title>Roo Plugin Demo</title>
+</head>
 <body>
-<section>
-  <h3>Context</h3>
-  <div class="kv"><span class="key">Mode</span><span><span id="modeVal" class="pill">–</span></span></div>
-  <div class="kv"><span class="key">Task</span><span id="taskVal">idle</span></div>
-  <div class="kv"><span class="key">Workspace</span><span id="wsVal" class="dim">–</span></div>
-  <div class="kv"><span class="key">Open Files</span><span id="filesVal" class="dim">–</span></div>
-</section>
-<section>
-  <h3>Token Usage</h3>
-  <div class="kv"><span class="key">Tokens In</span><span id="tokensIn">0</span></div>
-  <div class="kv"><span class="key">Tokens Out</span><span id="tokensOut">0</span></div>
-  <div class="kv"><span class="key">Cost</span>$<span id="cost">0.0000</span></div>
-  <div class="kv"><span class="key">Context</span><span id="ctxTokens">0</span> tokens</div>
-</section>
-<section>
-  <h3>Tool Failures</h3>
-  <div id="failureLog"><span class="dim">None yet.</span></div>
-</section>
-<section>
-  <h3>Agent Messages</h3>
-  <div id="messageLog"><span class="dim">Waiting for messages…</span></div>
-  <button class="sec" id="clearBtn">Clear</button>
-</section>
-<section>
-  <h3>Send to Agent</h3>
-  <textarea id="msgInput" placeholder="Type a message… (Ctrl+Enter to send)"></textarea>
-  <div>
-    <button id="sendBtn">Send</button>
-    <button class="sec" id="dateTimeBtn">Ask Date &amp; Time</button>
-  </div>
-  <div id="sendStatus"></div>
-</section>
-<section>
-  <h3>Panel Message Bus</h3>
-  <button id="pingBtn">Ping Extension Host</button>
-  <div id="pingStatus" class="dim">–</div>
-</section>
-<script>
-const vscode = acquireVsCodeApi();
-const $ = id => document.getElementById(id);
-
-window.addEventListener('message', e => {
-  const m = e.data;
-  if (m.type === 'contextUpdate') {
-    $('modeVal').textContent = m.context.mode || '–';
-    $('taskVal').textContent = m.context.taskId ? m.context.taskId.slice(0, 12) + '…' : 'idle';
-    $('wsVal').textContent = (m.context.workspaceFolders ?? []).map(p => p.split(/[\\/]/).pop()).join(', ') || '–';
-    $('filesVal').textContent = (m.context.openFiles ?? []).map(p => p.split(/[\\/]/).pop()).join(', ') || 'none';
-  } else if (m.type === 'tokenUsage' && m.tokenUsage) {
-    $('tokensIn').textContent = m.tokenUsage.totalTokensIn.toLocaleString();
-    $('tokensOut').textContent = m.tokenUsage.totalTokensOut.toLocaleString();
-    $('cost').textContent = m.tokenUsage.totalCost.toFixed(4);
-    $('ctxTokens').textContent = m.tokenUsage.contextTokens.toLocaleString();
-  } else if (m.type === 'toolFailed') {
-    $('failureLog').querySelector('.dim')?.remove();
-    const el = document.createElement('div'); el.className = 'failure-line';
-    el.textContent = '✗ ' + m.toolName + ': ' + m.errorMessage; $('failureLog').appendChild(el);
-  } else if (m.type === 'agentMessage' && m.message.type === 'say' && m.message.say === 'text' && !m.message.partial && m.message.text) {
-    $('messageLog').querySelector('.dim')?.remove();
-    const el = document.createElement('div'); el.className = 'msg-line';
-    el.textContent = '[' + m.action + '] ' + m.message.text.slice(0, 200);
-    const log = $('messageLog'); log.appendChild(el); log.scrollTop = log.scrollHeight;
-  } else if (m.type === 'pingFromExtension') {
-    $('pingStatus').textContent = '📨 Ping from extension host (' + (Date.now() - m.ts) + ' ms) — sending pong…';
-    vscode.postMessage({ type: 'pong', ts: m.ts });
-  } else if (m.type === 'pongFromExtension') {
-    $('pingStatus').textContent = '🏓 Pong from extension host — round-trip ' + m.roundTrip + ' ms';
-  } else if (m.type === 'error') {
-    $('sendStatus').textContent = '⚠ ' + m.text;
-    setTimeout(() => { $('sendStatus').textContent = ''; }, 4000);
-  }
-});
-
-$('sendBtn').addEventListener('click', () => {
-  const text = $('msgInput').value.trim(); if (!text) return;
-  vscode.postMessage({ type: 'sendToAgent', text }); $('msgInput').value = '';
-  $('sendStatus').textContent = '✓ Sent'; setTimeout(() => { $('sendStatus').textContent = ''; }, 2000);
-});
-$('msgInput').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('sendBtn').click(); });
-$('dateTimeBtn').addEventListener('click', () => {
-  vscode.postMessage({ type: 'sendToAgent', text: 'What is the current date and time?' });
-  $('sendStatus').textContent = '✓ Sent'; setTimeout(() => { $('sendStatus').textContent = ''; }, 2000);
-});
-$('clearBtn').addEventListener('click', () => { $('messageLog').innerHTML = ''; });
-$('pingBtn').addEventListener('click', () => {
-  vscode.postMessage({ type: 'pingExtension', ts: Date.now() });
-  $('pingStatus').textContent = '⏳ Waiting for pong…';
-});
-</script>
+  <div id="root"></div>
+  <script type="module" nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`
 }
@@ -300,7 +230,7 @@ export function activate(context: vscode.ExtensionContext) {
 	updateStatusBar(handle.getContext())
 
 	// ── 6. Register the sidebar panel ────────────────────────────────────────
-	const panelProvider = new RooPluginPanelProvider(handle, outputChannel)
+	const panelProvider = new RooPluginPanelProvider(context.extensionUri, handle, outputChannel)
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(RooPluginPanelProvider.VIEW_ID, panelProvider, {
 			webviewOptions: { retainContextWhenHidden: true },

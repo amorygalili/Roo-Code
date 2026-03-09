@@ -4,3 +4,4 @@ packages:
     - "apps/*"
     - "packages/*"
     - "examples/*"
+    - "examples/roo-plugin-example/webview-ui"

@@ -2,6 +2,8 @@
 
 A VS Code extension that demonstrates all major Roo Code plugin API features inside a **sidebar panel UI** (plus a status bar item as a secondary display).
 
+The panel UI is built with **Vite + React + TypeScript** and lives in `webview-ui/`. The extension host (`src/extension.ts`) loads the compiled assets at runtime via `webview.asWebviewUri`.
+
 | Feature                  | Where it shows up                                                              |
 | ------------------------ | ------------------------------------------------------------------------------ |
 | **Tool registration**    | `word_count` and `get_datetime` tools available to the agent                   |
@@ -17,31 +19,42 @@ A VS Code extension that demonstrates all major Roo Code plugin API features ins
 ## Prerequisites
 
 - [Node.js](https://nodejs.org) 20+
-- [pnpm](https://pnpm.io) (used by the Roo Code monorepo)
+- [pnpm](https://pnpm.io) 10+ (the Roo Code monorepo uses pnpm as its package manager)
 - The **Roo Code** extension installed in VS Code (`RooVeterinaryInc.roo-cline`)
 
 ---
 
 ## Setup
 
-From the `examples/roo-plugin-example` directory:
+Dependencies are managed by the monorepo. From the **repository root**, run:
 
 ```bash
-npm install
-npm run compile
+pnpm install
 ```
+
+This installs both the extension host dependencies and the `webview-ui` dependencies in one step (both packages are declared in `pnpm-workspace.yaml`).
 
 ---
 
 ## Running in VS Code (Extension Development Host)
 
-1. Open the **root** of the Roo Code repository in VS Code (not the example subfolder):
+1. Build the webview UI (required before first launch, and after any changes to `webview-ui/src/`):
+
+    ```bash
+    # From the repository root:
+    pnpm --filter roo-plugin-example-webview-ui run build
+
+    # Or from the examples/roo-plugin-example directory:
+    pnpm run build:webview-ui
+    ```
+
+2. Open the **root** of the Roo Code repository in VS Code (not the example subfolder):
 
     ```bash
     code .
     ```
 
-2. In the **Run and Debug** panel, select **"Run Roo Plugin Example"** from the dropdown and press **F5**.
+3. In the **Run and Debug** panel, select **"Run Roo Plugin Example"** from the dropdown and press **F5**.
    This opens an **Extension Development Host** window with both Roo Code and this example plugin loaded together.
 
     > **Why the root?** The EDH starts with a clean profile that has no installed extensions.
@@ -49,7 +62,7 @@ npm run compile
     > `--extensionDevelopmentPath` arguments, so both load side-by-side without needing
     > Roo Code to be installed in your normal VS Code profile.
 
-3. In the Extension Development Host window, verify the plugin activated:
+4. In the Extension Development Host window, verify the plugin activated:
     - A notification appears: _"Roo Plugin Example activated — open the 'Roo Plugin Demo' panel in the Roo sidebar."_
     - A `$(robot) Roo [code] idle` item appears in the bottom-right status bar.
     - A **"Roo Plugin Demo"** section appears inside the Roo sidebar (click the Roo icon in the Activity Bar).
@@ -119,14 +132,51 @@ The same action is also available via the Command Palette: **"Roo: Ask Agent for
 
 ---
 
+## Development workflow
+
+Two processes run in parallel during active development:
+
+| Process        | Command (run from `examples/roo-plugin-example/`) | What it does                                            |
+| -------------- | ------------------------------------------------- | ------------------------------------------------------- |
+| Extension host | `pnpm run watch`                                  | Recompiles `src/extension.ts` on save via `tsc --watch` |
+| Webview UI     | `pnpm --dir webview-ui run build`                 | One-shot Vite production build; re-run after UI changes |
+
+> **Tip:** The webview UI does not use Vite's HMR inside the Extension Development Host. After editing files under `webview-ui/src/`, rebuild with `pnpm run build:webview-ui` and reload the EDH window (`Ctrl+R` / `Cmd+R`).
+
+---
+
+## Packaging
+
+To produce a `.vsix` file:
+
+```bash
+# From examples/roo-plugin-example/:
+pnpm run package
+```
+
+This runs `build:webview-ui` → `compile` → `vsce package` in sequence. The resulting file is written to `bin/roo-plugin-example-0.0.1.vsix`. The `.vscodeignore` file ensures that only the compiled outputs (`out/` and `webview-ui/dist/`) are bundled — source files and `node_modules` are excluded.
+
+---
+
 ## File overview
 
 ```
 examples/roo-plugin-example/
-├── package.json        # Extension manifest: view contribution, commands, roo-code auto-discovery
-├── tsconfig.json       # TypeScript config (CommonJS output)
-└── src/
-    └── extension.ts    # activate() — tools, panel provider, event forwarding, message handling
+├── .vscodeignore           # Excludes source & node_modules from the VSIX
+├── package.json            # Extension manifest: view contribution, commands, scripts
+├── tsconfig.json           # TypeScript config for the extension host (CommonJS output)
+├── src/
+│   └── extension.ts        # activate() — tools, panel provider, event forwarding
+└── webview-ui/             # Vite + React + TypeScript panel UI
+    ├── package.json        # UI dependencies (react, vite, @vitejs/plugin-react)
+    ├── tsconfig.json       # TypeScript config for the webview (bundler module resolution)
+    ├── vite.config.ts      # Builds to dist/ with predictable asset filenames
+    ├── index.html          # Vite entry point
+    └── src/
+        ├── vite-env.d.ts   # Vite client types + acquireVsCodeApi() declaration
+        ├── main.tsx        # React entry — mounts <App /> into #root
+        ├── App.tsx         # Panel UI component: context, tokens, messages, send, ping
+        └── App.css         # VS Code CSS variable-based styles
 ```
 
 ### Key points in `package.json`
