@@ -64,7 +64,9 @@ class RooPluginHandleImpl implements RooPluginHandle {
 	}
 
 	onContextChange(listener: (context: RooTaskContext) => void): RooDisposable {
-		return this._service.subscribeToContext(listener)
+		const disposable = this._service.subscribeToContext(listener)
+		this._disposables.push(disposable)
+		return disposable
 	}
 
 	async sendMessageToAgent(message: string, images?: string[]): Promise<void> {
@@ -91,11 +93,15 @@ class RooPluginHandleImpl implements RooPluginHandle {
 	onTokenUsageUpdated(
 		listener: (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void,
 	): RooDisposable {
-		return this._service.subscribeToTokenUsageUpdated(listener)
+		const disposable = this._service.subscribeToTokenUsageUpdated(listener)
+		this._disposables.push(disposable)
+		return disposable
 	}
 
 	onToolFailed(listener: (taskId: string, toolName: ToolName, errorMessage: string) => void): RooDisposable {
-		return this._service.subscribeToToolFailed(listener)
+		const disposable = this._service.subscribeToToolFailed(listener)
+		this._disposables.push(disposable)
+		return disposable
 	}
 
 	// ── Phase 4: Plugin Panel Message Bus ──────────────────────────────────
@@ -138,11 +144,13 @@ class RooPluginHandleImpl implements RooPluginHandle {
 
 	onMessageFromPanel(listener: (message: unknown) => void): RooDisposable {
 		this._panelListeners.add(listener)
-		return {
+		const disposable: RooDisposable = {
 			dispose: () => {
 				this._panelListeners.delete(listener)
 			},
 		}
+		this._disposables.push(disposable)
+		return disposable
 	}
 
 	// ── Phase 5: Agent Communication ────────────────────────────────────────
@@ -150,7 +158,9 @@ class RooPluginHandleImpl implements RooPluginHandle {
 	onAgentMessage(
 		listener: (taskId: string, action: "created" | "updated", message: ClineMessage) => void,
 	): RooDisposable {
-		return this._service.subscribeToAgentMessages(listener)
+		const disposable = this._service.subscribeToAgentMessages(listener)
+		this._disposables.push(disposable)
+		return disposable
 	}
 
 	dispose(): void {

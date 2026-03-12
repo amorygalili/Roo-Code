@@ -37,9 +37,12 @@ type IncomingMessage =
 	| { type: "agentMessage"; taskId: string; action: "created" | "updated"; message: AgentMessage }
 	| { type: "pingFromExtension"; ts: number }
 	| { type: "pongFromExtension"; ts: number; roundTrip: number }
+	| { type: "profileUpdate"; activeProfile: string | undefined; profiles: string[] }
 	| { type: "error"; text: string }
 
 // ── Component ─────────────────────────────────────────────────────────────────
+
+const DEMO_PROFILE_NAME = "Roo Plugin Demo"
 
 export default function App() {
 	const [context, setContext] = useState<RooTaskContext | null>(null)
@@ -49,6 +52,8 @@ export default function App() {
 	const [pingStatus, setPingStatus] = useState("–")
 	const [sendStatus, setSendStatus] = useState("")
 	const [msgInput, setMsgInput] = useState("")
+	const [activeProfile, setActiveProfile] = useState<string | undefined>(undefined)
+	const [profiles, setProfiles] = useState<string[]>([])
 	const messageLogRef = useRef<HTMLDivElement>(null)
 
 	// Listen for messages from the extension host.
@@ -74,6 +79,9 @@ export default function App() {
 				vscode.postMessage({ type: "pong", ts: m.ts })
 			} else if (m.type === "pongFromExtension") {
 				setPingStatus(`🏓 Pong from extension host — round-trip ${m.roundTrip} ms`)
+			} else if (m.type === "profileUpdate") {
+				setActiveProfile(m.activeProfile)
+				setProfiles(m.profiles)
 			} else if (m.type === "error") {
 				setSendStatus(`⚠ ${m.text}`)
 				setTimeout(() => setSendStatus(""), 4000)
@@ -203,6 +211,38 @@ export default function App() {
 					</button>
 				</div>
 				{sendStatus && <div className="status">{sendStatus}</div>}
+			</section>
+
+			<section>
+				<h3>Configuration Profile</h3>
+				<div className="kv">
+					<span className="key">Active</span>
+					<span>
+						{activeProfile ? (
+							<span className={activeProfile === DEMO_PROFILE_NAME ? "pill" : ""}>{activeProfile}</span>
+						) : (
+							<span className="dim">–</span>
+						)}
+					</span>
+				</div>
+				<div className="kv">
+					<span className="key">All Profiles</span>
+					<span className="dim">{profiles.length > 0 ? profiles.join(", ") : "–"}</span>
+				</div>
+				<div>
+					<button
+						className="sec"
+						onClick={() => vscode.postMessage({ type: "upsertDemoProfile" })}
+						title={`Create or refresh the "${DEMO_PROFILE_NAME}" profile`}>
+						Create / Refresh Demo Profile
+					</button>
+					<button
+						onClick={() => vscode.postMessage({ type: "activateDemoProfile" })}
+						disabled={activeProfile === DEMO_PROFILE_NAME}
+						title={`Switch Roo Code to the "${DEMO_PROFILE_NAME}" profile`}>
+						Activate Demo Profile
+					</button>
+				</div>
 			</section>
 
 			<section>

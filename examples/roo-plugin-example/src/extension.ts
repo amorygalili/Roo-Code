@@ -2,85 +2,18 @@
  * Roo Plugin Example
  *
  * Demonstrates all plugin API features in a sidebar panel UI:
- *   1. Tool registration    – adds `word_count` and `get_datetime` tools the agent can call
- *   2. Context subscription – live mode / task / file info shown in the panel and status bar
- *   3. Token usage tracking – cumulative token counts and cost displayed in the panel
- *   4. Tool failure alerts  – failed tool invocations logged in the panel
- *   5. Agent message stream – live assistant transcript shown in the panel
- *   6. Panel message bus    – bidirectional ping/pong between the panel and extension host
- *   7. Agent messaging      – panel textarea sends messages directly to the active task
+ *   1. Tool registration        – adds `word_count` and `get_datetime` tools the agent can call
+ *   2. Context subscription     – live mode / task / file info shown in the panel and status bar
+ *   3. Token usage tracking     – cumulative token counts and cost displayed in the panel
+ *   4. Tool failure alerts      – failed tool invocations logged in the panel
+ *   5. Agent message stream     – live assistant transcript shown in the panel
+ *   6. Panel message bus        – bidirectional ping/pong between the panel and extension host
+ *   7. Agent messaging          – panel textarea sends messages directly to the active task
+ *   8. Configuration profiles   – creates and activates a custom API configuration profile
  */
 
 import * as vscode from "vscode"
-
-// The Roo Code extension's public export shape.
-// In a real plugin you would import from "@roo-code/types" once it is published.
-interface TokenUsage {
-	totalTokensIn: number
-	totalTokensOut: number
-	totalCacheWrites?: number
-	totalCacheReads?: number
-	totalCost: number
-	contextTokens: number
-}
-
-type ToolUsage = Record<string, { attempts: number; failures: number }>
-
-interface RooTaskContext {
-	taskId: string | undefined
-	mode: string
-	workspaceFolders: string[]
-	openFiles: string[]
-	tokenUsage?: TokenUsage
-	toolUsage?: ToolUsage
-}
-
-interface ClineMessage {
-	ts: number
-	type: "ask" | "say"
-	say?: string
-	ask?: string
-	text?: string
-	partial?: boolean
-}
-
-interface RooWebview {
-	postMessage(message: unknown): Thenable<boolean>
-	onDidReceiveMessage(listener: (message: unknown) => void): { dispose(): void }
-}
-
-interface RooWebviewView {
-	readonly webview: RooWebview
-}
-
-interface RooPluginHandle {
-	getContext(): RooTaskContext
-	onContextChange(listener: (ctx: RooTaskContext) => void): { dispose(): void }
-	onTokenUsageUpdated(listener: (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void): {
-		dispose(): void
-	}
-	onToolFailed(listener: (taskId: string, toolName: string, errorMessage: string) => void): { dispose(): void }
-	onAgentMessage(listener: (taskId: string, action: "created" | "updated", message: ClineMessage) => void): {
-		dispose(): void
-	}
-	registerPanelView(view: RooWebviewView): { dispose(): void }
-	postMessageToPanel(message: unknown): Promise<void>
-	onMessageFromPanel(listener: (message: unknown) => void): { dispose(): void }
-	sendMessageToAgent(message: string): Promise<void>
-	registerTool(def: {
-		name: string
-		description: string
-		parameters?: unknown
-		execute(args: unknown): Promise<string>
-	}): { dispose(): void }
-	dispose(): void
-}
-
-interface RooCodeAPI {
-	plugins: {
-		register(manifest: { id: string; displayName: string; description?: string }): RooPluginHandle
-	}
-}
+import type { RooCodeAPI, RooPluginHandle, RooTaskContext, RooWebviewView, ProviderSettings } from "@roo-code/types"
 
 // ── Panel UI ─────────────────────────────────────────────────────────────────
 
@@ -108,7 +41,7 @@ class RooPluginPanelProvider implements vscode.WebviewViewProvider {
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
 		private readonly _handle: RooPluginHandle,
-		private readonly _outputChannel: vscode.OutputChannel,
+		private readonly _roo: RooCodeAPI,
 	) {}
 
 	resolveWebviewView(
@@ -125,14 +58,21 @@ class RooPluginPanelProvider implements vscode.WebviewViewProvider {
 
 		// Hook this view into the Roo plugin panel message bus so that
 		// handle.postMessageToPanel() / handle.onMessageFromPanel() work.
-		const viewReg = this._handle.registerPanelView(webviewView)
+		// Cast required: vscode.WebviewView.postMessage returns Thenable<boolean>
+		// while RooWebviewView expects Promise<boolean>; the runtime shape is compatible.
+		const viewReg = this._handle.registerPanelView(webviewView as unknown as RooWebviewView)
 		webviewView.onDidDispose(() => {
 			viewReg.dispose()
 			this._view = undefined
 		})
 
-		// Push a context snapshot immediately so the panel isn't blank on open.
+		// Push initial snapshots so the panel isn't blank on open.
 		this._handle.postMessageToPanel({ type: "contextUpdate", context: this._handle.getContext() })
+		this._handle.postMessageToPanel({
+			type: "profileUpdate",
+			activeProfile: this._roo.getActiveProfile(),
+			profiles: this._roo.getProfiles(),
+		})
 	}
 }
 
@@ -188,36 +128,45 @@ export function activate(context: vscode.ExtensionContext) {
 	})
 	context.subscriptions.push({ dispose: () => handle.dispose() })
 
-	// ── 3. Register custom tools ──────────────────────────────────────────────
+	// ── 3. Create / refresh the demo configuration profile ───────────────────
+	// upsertProfile creates the profile if it doesn't exist, or updates it if
+	// it does — without switching away from whatever the user has active.
+	const DEMO_PROFILE_NAME = "Roo Plugin Demo"
+	const DEMO_PROFILE_SETTINGS: ProviderSettings = {
+		apiProvider: "openai",
+		openAiBaseUrl: "https://api.openai.com/v1",
+		openAiModelId: "gpt-4o-mini",
+	}
+	roo.upsertProfile(DEMO_PROFILE_NAME, DEMO_PROFILE_SETTINGS, false).catch((err: unknown) => {
+		console.error("[roo-plugin-example] Failed to upsert demo profile:", err)
+	})
+
+	// ── 4. Register custom tools ──────────────────────────────────────────────
 
 	// Tool A: count words in a string.
-	context.subscriptions.push(
-		handle.registerTool({
-			name: "word_count",
-			description: "Count the number of words in a piece of text.",
-			execute: async (args: unknown) => {
-				const { text } = args as { text: string }
-				if (typeof text !== "string") return "Error: `text` must be a string."
-				const count = text.trim() === "" ? 0 : text.trim().split(/\s+/).length
-				return `The text contains ${count} word${count === 1 ? "" : "s"}.`
-			},
-		}),
-	)
+	handle.registerTool({
+		name: "word_count",
+		description: "Count the number of words in a piece of text.",
+		execute: async (args: unknown) => {
+			const { text } = args as { text: string }
+			if (typeof text !== "string") return "Error: `text` must be a string."
+			const count = text.trim() === "" ? 0 : text.trim().split(/\s+/).length
+			return `The text contains ${count} word${count === 1 ? "" : "s"}.`
+		},
+	})
 
 	// Tool B: return the current date and time.
-	context.subscriptions.push(
-		handle.registerTool({
-			name: "get_datetime",
-			description: "Return the current date and time in ISO 8601 format.",
-			execute: async () => new Date().toISOString(),
-		}),
-	)
+	handle.registerTool({
+		name: "get_datetime",
+		description: "Return the current date and time in ISO 8601 format.",
+		execute: async () => new Date().toISOString(),
+	})
 
-	// ── 4. Output channel (logs extension-host activity) ─────────────────────
+	// ── 5. Output channel (logs extension-host activity) ─────────────────────
 	const outputChannel = vscode.window.createOutputChannel("Roo Plugin Example")
 	context.subscriptions.push(outputChannel)
 
-	// ── 5. Status bar (secondary display; panel is the primary UI) ───────────
+	// ── 6. Status bar (secondary display; panel is the primary UI) ───────────
 	const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
 	statusBar.tooltip = "Roo Code agent context — open the Roo Plugin Demo panel for details"
 	context.subscriptions.push(statusBar)
@@ -229,88 +178,97 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 	updateStatusBar(handle.getContext())
 
-	// ── 6. Register the sidebar panel ────────────────────────────────────────
-	const panelProvider = new RooPluginPanelProvider(context.extensionUri, handle, outputChannel)
+	// ── 7. Register the sidebar panel ────────────────────────────────────────
+	const panelProvider = new RooPluginPanelProvider(context.extensionUri, handle, roo)
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(RooPluginPanelProvider.VIEW_ID, panelProvider, {
 			webviewOptions: { retainContextWhenHidden: true },
 		}),
 	)
 
-	// ── 7. Context subscription → status bar + panel ─────────────────────────
-	context.subscriptions.push(
-		handle.onContextChange((ctx) => {
-			updateStatusBar(ctx)
-			handle.postMessageToPanel({ type: "contextUpdate", context: ctx })
-		}),
-	)
+	// ── 8. Context subscription → status bar + panel ─────────────────────────
+	handle.onContextChange((ctx) => {
+		updateStatusBar(ctx)
+		handle.postMessageToPanel({ type: "contextUpdate", context: ctx })
+	})
 
-	// ── 8. Token usage → panel ───────────────────────────────────────────────
+	// ── 9. Token usage → panel ───────────────────────────────────────────────
 	// onTokenUsageUpdated fires after each LLM request with live cumulative counts.
-	context.subscriptions.push(
-		handle.onTokenUsageUpdated((taskId, tokenUsage, toolUsage) => {
-			const { totalTokensIn, totalTokensOut, totalCost } = tokenUsage
-			outputChannel.appendLine(
-				`[tokens] task=${taskId.slice(0, 8)} in=${totalTokensIn} out=${totalTokensOut} cost=$${totalCost.toFixed(4)}`,
-			)
-			// Update status bar cost and forward to panel.
-			const ctx = handle.getContext()
-			const task = ctx.taskId ? `task:${ctx.taskId.slice(0, 8)}` : "idle"
-			statusBar.text = `$(robot) Roo [${ctx.mode}] ${task} · $${totalCost.toFixed(4)}`
-			handle.postMessageToPanel({ type: "tokenUsage", taskId, tokenUsage, toolUsage })
-		}),
-	)
+	handle.onTokenUsageUpdated((taskId, tokenUsage, toolUsage) => {
+		const { totalTokensIn, totalTokensOut, totalCost } = tokenUsage
+		outputChannel.appendLine(
+			`[tokens] task=${taskId.slice(0, 8)} in=${totalTokensIn} out=${totalTokensOut} cost=$${totalCost.toFixed(4)}`,
+		)
+		// Update status bar cost and forward to panel.
+		const ctx = handle.getContext()
+		const task = ctx.taskId ? `task:${ctx.taskId.slice(0, 8)}` : "idle"
+		statusBar.text = `$(robot) Roo [${ctx.mode}] ${task} · $${totalCost.toFixed(4)}`
+		handle.postMessageToPanel({ type: "tokenUsage", taskId, tokenUsage, toolUsage })
+	})
 
-	// ── 9. Tool failures → notification + panel ──────────────────────────────
+	// ── 10. Tool failures → notification + panel ─────────────────────────────
 	// onToolFailed fires whenever a tool invocation fails inside the active task.
-	context.subscriptions.push(
-		handle.onToolFailed((taskId, toolName, errorMessage) => {
-			outputChannel.appendLine(`[tool-failed] task=${taskId.slice(0, 8)} tool=${toolName}: ${errorMessage}`)
-			vscode.window.showWarningMessage(`Roo: Tool "${toolName}" failed — ${errorMessage}`)
-			handle.postMessageToPanel({ type: "toolFailed", taskId, toolName, errorMessage })
-		}),
-	)
+	handle.onToolFailed((taskId, toolName, errorMessage) => {
+		outputChannel.appendLine(`[tool-failed] task=${taskId.slice(0, 8)} tool=${toolName}: ${errorMessage}`)
+		vscode.window.showWarningMessage(`Roo: Tool "${toolName}" failed — ${errorMessage}`)
+		handle.postMessageToPanel({ type: "toolFailed", taskId, toolName, errorMessage })
+	})
 
-	// ── 10. Agent messages → output channel + panel ──────────────────────────
+	// ── 11. Agent messages → output channel + panel ──────────────────────────
 	// onAgentMessage fires for every message the agent creates or updates.
-	context.subscriptions.push(
-		handle.onAgentMessage((taskId, action, message) => {
-			if (message.type === "say" && message.say === "text" && !message.partial && message.text) {
-				outputChannel.appendLine(`[agent] [${taskId.slice(0, 8)}] [${action}] ${message.text.slice(0, 120)}`)
+	handle.onAgentMessage((taskId, action, message) => {
+		if (message.type === "say" && message.say === "text" && !message.partial && message.text) {
+			outputChannel.appendLine(`[agent] [${taskId.slice(0, 8)}] [${action}] ${message.text.slice(0, 120)}`)
+		}
+		handle.postMessageToPanel({ type: "agentMessage", taskId, action, message })
+	})
+
+	// ── 12. Panel → extension message handling ────────────────────────────────
+	handle.onMessageFromPanel(async (rawMessage) => {
+		outputChannel.appendLine(`[panel → ext] ${JSON.stringify(rawMessage)}`)
+		const msg = rawMessage as { type: string; text?: string; ts?: number }
+
+		if (msg.type === "sendToAgent") {
+			const ctx = handle.getContext()
+			if (!ctx.taskId) {
+				handle.postMessageToPanel({ type: "error", text: "No active Roo task — start one first." })
+			} else {
+				await handle.sendMessageToAgent(msg.text ?? "")
 			}
-			handle.postMessageToPanel({ type: "agentMessage", taskId, action, message })
-		}),
-	)
+		} else if (msg.type === "pingExtension") {
+			// Panel pinged the extension host — echo a pong back.
+			outputChannel.appendLine("[panel → ext] ping — sending pong")
+			handle.postMessageToPanel({
+				type: "pongFromExtension",
+				ts: msg.ts,
+				roundTrip: Date.now() - (msg.ts ?? 0),
+			})
+		} else if (msg.type === "pong") {
+			// Panel responded to our ping command.
+			outputChannel.appendLine(`[panel → ext] pong — round-trip ${Date.now() - (msg.ts ?? 0)} ms`)
+		} else if (msg.type === "upsertDemoProfile") {
+			// Panel asked us to (re-)create the demo profile without activating it.
+			outputChannel.appendLine(`[profile] upserting "${DEMO_PROFILE_NAME}"`)
+			await roo.upsertProfile(DEMO_PROFILE_NAME, DEMO_PROFILE_SETTINGS, false)
+			handle.postMessageToPanel({
+				type: "profileUpdate",
+				activeProfile: roo.getActiveProfile(),
+				profiles: roo.getProfiles(),
+			})
+		} else if (msg.type === "activateDemoProfile") {
+			// Panel asked us to switch Roo Code to the demo profile.
+			outputChannel.appendLine(`[profile] activating "${DEMO_PROFILE_NAME}"`)
+			await roo.setActiveProfile(DEMO_PROFILE_NAME)
+			handle.postMessageToPanel({
+				type: "profileUpdate",
+				activeProfile: roo.getActiveProfile(),
+				profiles: roo.getProfiles(),
+			})
+			vscode.window.showInformationMessage(`Roo: switched to profile "${DEMO_PROFILE_NAME}"`)
+		}
+	})
 
-	// ── 11. Panel → extension message handling ────────────────────────────────
-	context.subscriptions.push(
-		handle.onMessageFromPanel(async (rawMessage) => {
-			outputChannel.appendLine(`[panel → ext] ${JSON.stringify(rawMessage)}`)
-			const msg = rawMessage as { type: string; text?: string; ts?: number }
-
-			if (msg.type === "sendToAgent") {
-				const ctx = handle.getContext()
-				if (!ctx.taskId) {
-					handle.postMessageToPanel({ type: "error", text: "No active Roo task — start one first." })
-				} else {
-					await handle.sendMessageToAgent(msg.text ?? "")
-				}
-			} else if (msg.type === "pingExtension") {
-				// Panel pinged the extension host — echo a pong back.
-				outputChannel.appendLine("[panel → ext] ping — sending pong")
-				handle.postMessageToPanel({
-					type: "pongFromExtension",
-					ts: msg.ts,
-					roundTrip: Date.now() - (msg.ts ?? 0),
-				})
-			} else if (msg.type === "pong") {
-				// Panel responded to our ping command.
-				outputChannel.appendLine(`[panel → ext] pong — round-trip ${Date.now() - (msg.ts ?? 0)} ms`)
-			}
-		}),
-	)
-
-	// ── 12. Commands ──────────────────────────────────────────────────────────
+	// ── 13. Commands ──────────────────────────────────────────────────────────
 
 	// Ping the panel from the extension host (demonstrates ext → panel direction).
 	context.subscriptions.push(
@@ -333,12 +291,24 @@ export function activate(context: vscode.ExtensionContext) {
 		}),
 	)
 
+	// Activate the demo profile from the Command Palette.
+	context.subscriptions.push(
+		vscode.commands.registerCommand("roo-plugin-example.activateDemoProfile", async () => {
+			await roo.setActiveProfile(DEMO_PROFILE_NAME)
+			handle.postMessageToPanel({
+				type: "profileUpdate",
+				activeProfile: roo.getActiveProfile(),
+				profiles: roo.getProfiles(),
+			})
+			vscode.window.showInformationMessage(`Roo: switched to profile "${DEMO_PROFILE_NAME}"`)
+		}),
+	)
+
 	vscode.window.showInformationMessage(
 		"Roo Plugin Example activated — open the 'Roo Plugin Demo' panel in the Roo sidebar.",
 	)
 }
 
 export function deactivate() {
-	// VS Code disposes context.subscriptions automatically;
-	// handle.dispose() above cleans up all tools and listeners.
+	console.log("Roo Plugin Example deactivated")
 }

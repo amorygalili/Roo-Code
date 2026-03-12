@@ -4,6 +4,7 @@
 	"description": "Demonstrates the Roo Code plugin API: tool registration, context subscription, and agent messaging.",
 	"version": "0.0.1",
 	"publisher": "example",
+	"type": "module",
 	"engines": {
 		"vscode": "^1.95.0"
 	},
@@ -39,6 +40,10 @@
 			{
 				"command": "roo-plugin-example.pingPanel",
 				"title": "Roo Plugin: Ping Panel from Extension Host"
+			},
+			{
+				"command": "roo-plugin-example.activateDemoProfile",
+				"title": "Roo Plugin: Activate Demo Configuration Profile"
 			}
 		]
 	},
@@ -50,6 +55,7 @@
 		"package": "pnpm run build:webview-ui && pnpm run compile && vsce package --no-dependencies --allow-missing-repository --out bin/roo-plugin-example-0.0.1.vsix"
 	},
 	"devDependencies": {
+		"@roo-code/types": "workspace:^",
 		"@types/node": "20.x",
 		"@types/vscode": "^1.95.0",
 		"@vscode/vsce": "^3.7.1",
