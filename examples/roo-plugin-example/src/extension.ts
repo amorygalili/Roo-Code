@@ -14,7 +14,7 @@
  */
 
 import * as vscode from "vscode"
-import type { RooCodeAPI, RooPluginHandle, RooTaskContext, RooWebviewView, ProviderSettings } from "@roo-code/types"
+import type { RooCodeAPI, RooPluginHandle, AgentTaskContext, RooWebviewView, ProviderSettings } from "@roo-code/types"
 
 // ── Panel UI ─────────────────────────────────────────────────────────────────
 
@@ -61,9 +61,9 @@ class RooPluginPanelProvider implements vscode.WebviewViewProvider {
 		// handle.postMessageToPanel() / handle.onMessageFromPanel() work.
 		// Cast required: vscode.WebviewView.postMessage returns Thenable<boolean>
 		// while RooWebviewView expects Promise<boolean>; the runtime shape is compatible.
-		const viewReg = this._handle.registerPanelView(webviewView as unknown as RooWebviewView)
+		const cleanupPanelView = this._handle.registerPanelView(webviewView as unknown as RooWebviewView)
 		webviewView.onDidDispose(() => {
-			viewReg.dispose()
+			cleanupPanelView()
 			this._view = undefined
 		})
 
@@ -182,8 +182,8 @@ export function activate(context: vscode.ExtensionContext) {
 			command: "uvx",
 			args: ["mcp-server-time"],
 		})
-		.then((serverDisposable) => {
-			context.subscriptions.push(serverDisposable)
+		.then((cleanupMcpServer) => {
+			context.subscriptions.push({ dispose: cleanupMcpServer })
 			outputChannel.appendLine("[mcp] Registered 'plugin-time-server' (mcp-server-time via uvx)")
 		})
 		.catch((err: unknown) => {
@@ -198,7 +198,7 @@ export function activate(context: vscode.ExtensionContext) {
 	statusBar.tooltip = "Roo Code agent context — open the Roo Plugin Demo panel for details"
 	context.subscriptions.push(statusBar)
 
-	function updateStatusBar(ctx: RooTaskContext) {
+	function updateStatusBar(ctx: AgentTaskContext) {
 		const task = ctx.taskId ? `task:${ctx.taskId.slice(0, 8)}` : "idle"
 		statusBar.text = `$(robot) Roo [${ctx.mode}] ${task}`
 		statusBar.show()
@@ -221,21 +221,21 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// ── 10. Token usage → panel ──────────────────────────────────────────────
 	// onTokenUsageUpdated fires after each LLM request with live cumulative counts.
-	handle.onTokenUsageUpdated((taskId, tokenUsage, toolUsage) => {
-		const { totalTokensIn, totalTokensOut, totalCost } = tokenUsage
+	handle.onTokenUsageUpdated((taskId, usage) => {
+		const { tokensIn, tokensOut, cost } = usage
 		outputChannel.appendLine(
-			`[tokens] task=${taskId.slice(0, 8)} in=${totalTokensIn} out=${totalTokensOut} cost=$${totalCost.toFixed(4)}`,
+			`[tokens] task=${taskId.slice(0, 8)} in=${tokensIn} out=${tokensOut} cost=$${cost.toFixed(4)}`,
 		)
 		// Update status bar cost and forward to panel.
 		const ctx = handle.getContext()
 		const task = ctx.taskId ? `task:${ctx.taskId.slice(0, 8)}` : "idle"
-		statusBar.text = `$(robot) Roo [${ctx.mode}] ${task} · $${totalCost.toFixed(4)}`
-		handle.postMessageToPanel({ type: "tokenUsage", taskId, tokenUsage, toolUsage })
+		statusBar.text = `$(robot) Roo [${ctx.mode}] ${task} · $${cost.toFixed(4)}`
+		handle.postMessageToPanel({ type: "tokenUsage", taskId, usage })
 	})
 
 	// ── 11. Tool failures → notification + panel ─────────────────────────────
-	// onToolFailed fires whenever a tool invocation fails inside the active task.
-	handle.onToolFailed((taskId, toolName, errorMessage) => {
+	// onToolCallFailed fires whenever a tool invocation fails inside the active task.
+	handle.onToolCallFailed((taskId, toolName, errorMessage) => {
 		outputChannel.appendLine(`[tool-failed] task=${taskId.slice(0, 8)} tool=${toolName}: ${errorMessage}`)
 		vscode.window.showWarningMessage(`Roo: Tool "${toolName}" failed — ${errorMessage}`)
 		handle.postMessageToPanel({ type: "toolFailed", taskId, toolName, errorMessage })
@@ -260,7 +260,7 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!ctx.taskId) {
 				handle.postMessageToPanel({ type: "error", text: "No active Roo task — start one first." })
 			} else {
-				await handle.sendMessageToAgent(msg.text ?? "")
+				await handle.sendMessage(msg.text ?? "")
 			}
 		} else if (msg.type === "pingExtension") {
 			// Panel pinged the extension host — echo a pong back.
@@ -314,7 +314,7 @@ export function activate(context: vscode.ExtensionContext) {
 				vscode.window.showInformationMessage("No active Roo task. Start a task first.")
 				return
 			}
-			await handle.sendMessageToAgent("What is the current date and time?")
+			await handle.sendMessage("What is the current date and time?")
 		}),
 	)
 

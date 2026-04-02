@@ -2,16 +2,21 @@ import * as vscode from "vscode"
 
 import { customToolRegistry } from "@roo-code/core"
 import type {
+	AgentProfileManager,
+	AgentTaskContext,
+	AgentTokenUsage,
+	AgentMessage,
+	AgentToolDefinition,
+} from "@roo-code/plugin-api"
+import type {
 	RooPluginService,
 	RooPluginHandle,
 	RooPluginManifest,
 	RooTaskContext,
-	RooDisposable,
 	RooWebviewView,
 	CustomToolDefinition,
 	PluginMcpServerConfig,
 	RooCodeAPI,
-	RooCodeEvents,
 	TokenUsage,
 	ToolUsage,
 	ToolName,
@@ -35,93 +40,246 @@ function makeContext(overrides: Partial<RooTaskContext> = {}): RooTaskContext {
 	}
 }
 
+/** Convert Roo's internal TokenUsage to the agent-agnostic AgentTokenUsage. */
+function toAgentTokenUsage(tokenUsage: TokenUsage): AgentTokenUsage {
+	return {
+		tokensIn: tokenUsage.totalTokensIn,
+		tokensOut: tokenUsage.totalTokensOut,
+		cost: tokenUsage.totalCost,
+		contextTokens: tokenUsage.contextTokens,
+		cacheWrites: tokenUsage.totalCacheWrites,
+		cacheReads: tokenUsage.totalCacheReads,
+	}
+}
+
+/** Convert Roo's internal RooTaskContext to the agent-agnostic AgentTaskContext. */
+function toAgentContext(ctx: RooTaskContext): AgentTaskContext {
+	return {
+		taskId: ctx.taskId,
+		mode: ctx.mode,
+		workspaceFolders: ctx.workspaceFolders,
+		openFiles: ctx.openFiles,
+		tokenUsage: ctx.tokenUsage ? toAgentTokenUsage(ctx.tokenUsage) : undefined,
+	}
+}
+
+/** Convert Roo's internal ClineMessage to the agent-agnostic AgentMessage. */
+function toAgentMessage(msg: ClineMessage): AgentMessage {
+	return {
+		id: msg.ts,
+		timestamp: msg.ts,
+		type: msg.type,
+		say: msg.say,
+		ask: msg.ask,
+		text: msg.text,
+		images: msg.images,
+		partial: msg.partial,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RooProfileManagerAdapter — wraps RooCodeAPI profile methods into AgentProfileManager
+// ---------------------------------------------------------------------------
+
+class RooProfileManagerAdapter implements AgentProfileManager {
+	constructor(private readonly _api: RooCodeAPI) {}
+
+	getProfiles(): string[] {
+		return this._api.getProfiles()
+	}
+
+	getProfile(name: string) {
+		const entry = this._api.getProfileEntry(name)
+		if (!entry) return undefined
+		return { id: entry.id, name: entry.name, settings: entry as Record<string, unknown> }
+	}
+
+	getActiveProfile(): string | undefined {
+		return this._api.getActiveProfile()
+	}
+
+	getCurrentSettings(): Record<string, unknown> {
+		return this._api.getConfiguration() as Record<string, unknown>
+	}
+
+	async createProfile(name: string, settings: Record<string, unknown> = {}, activate = true): Promise<string> {
+		return await this._api.createProfile(name, settings as Parameters<RooCodeAPI["createProfile"]>[1], activate)
+	}
+
+	async updateProfile(name: string, settings: Record<string, unknown>, activate = true): Promise<string | undefined> {
+		return await this._api.updateProfile(name, settings as Parameters<RooCodeAPI["updateProfile"]>[1], activate)
+	}
+
+	async upsertProfile(name: string, settings: Record<string, unknown>, activate = true): Promise<string | undefined> {
+		return await this._api.upsertProfile(name, settings as Parameters<RooCodeAPI["upsertProfile"]>[1], activate)
+	}
+
+	async deleteProfile(name: string): Promise<void> {
+		await this._api.deleteProfile(name)
+	}
+
+	async setActiveProfile(name: string): Promise<void> {
+		await this._api.setActiveProfile(name)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // RooPluginHandleImpl
 // ---------------------------------------------------------------------------
 
 class RooPluginHandleImpl implements RooPluginHandle {
 	public readonly manifest: RooPluginManifest
+	public readonly profiles: AgentProfileManager
 	private readonly _service: RooPluginServiceImpl
-	private readonly _disposables: RooDisposable[] = []
+	private readonly _cleanups: Array<() => void> = []
 	private _disposed = false
 
-	// Phase 4: panel view state
+	// Panel view state
 	private _panelView: RooWebviewView | undefined = undefined
 	private readonly _panelListeners = new Set<(message: unknown) => void>()
-	private _panelViewDisposable: RooDisposable | undefined = undefined
+	private _panelViewCleanup: (() => void) | undefined = undefined
 
 	constructor(manifest: RooPluginManifest, service: RooPluginServiceImpl) {
 		this.manifest = manifest
 		this._service = service
+		this.profiles = new RooProfileManagerAdapter(service.api)
 
 		// Register declarative tools from the manifest.
+		// These are Roo-native CustomToolDefinition objects, so register them
+		// directly with the registry (bypassing the AgentToolDefinition adapter).
 		if (manifest.tools) {
 			for (const tool of manifest.tools) {
-				this._disposables.push(this.registerTool(tool))
+				this._cleanups.push(this._registerNativeTool(tool))
 			}
 		}
 	}
 
-	getContext(): RooTaskContext {
-		return this._service.getContext()
+	getContext(): AgentTaskContext {
+		return toAgentContext(this._service.getContext())
 	}
 
-	onContextChange(listener: (context: RooTaskContext) => void): RooDisposable {
-		const disposable = this._service.subscribeToContext(listener)
-		this._disposables.push(disposable)
-		return disposable
+	onContextChange(listener: (context: AgentTaskContext) => void): () => void {
+		const wrapper = (ctx: RooTaskContext) => listener(toAgentContext(ctx))
+		const cleanup = this._service.subscribeToContext(wrapper)
+		this._cleanups.push(cleanup)
+		return cleanup
 	}
 
+	// ── Task management ─────────────────────────────────────────────────────
+
+	async startTask(text?: string, images?: string[]): Promise<string> {
+		return await this._service.api.startNewTask({ text, images })
+	}
+
+	async resumeTask(taskId: string): Promise<void> {
+		await this._service.api.resumeTask(taskId)
+	}
+
+	async setCurrentTask(taskId: string): Promise<void> {
+		await this._service.api.resumeTask(taskId)
+	}
+
+	async cancelCurrentTask(): Promise<void> {
+		await this._service.api.cancelCurrentTask()
+	}
+
+	// ── Messaging ────────────────────────────────────────────────────────────
+
+	async sendMessage(text: string, images?: string[]): Promise<void> {
+		await this._service.api.sendMessage(text, images)
+	}
+
+	/** @deprecated Use `sendMessage()` instead. */
 	async sendMessageToAgent(message: string, images?: string[]): Promise<void> {
-		await this._service.api.sendMessage(message, images)
+		return this.sendMessage(message, images)
 	}
 
-	registerTool(definition: CustomToolDefinition): RooDisposable {
-		// Namespace the tool name to avoid collisions between plugins.
+	async interruptAgent(): Promise<void> {
+		await this._service.api.pressSecondaryButton()
+	}
+
+	onAgentMessage(
+		listener: (taskId: string, action: "created" | "updated", message: AgentMessage) => void,
+	): () => void {
+		const wrapper = (taskId: string, action: "created" | "updated", msg: ClineMessage) =>
+			listener(taskId, action, toAgentMessage(msg))
+		const cleanup = this._service.subscribeToAgentMessages(wrapper)
+		this._cleanups.push(cleanup)
+		return cleanup
+	}
+
+	// ── Token & error events ─────────────────────────────────────────────────
+
+	onTokenUsageUpdated(listener: (taskId: string, usage: AgentTokenUsage) => void): () => void {
+		const wrapper = (taskId: string, tokenUsage: TokenUsage, _toolUsage: ToolUsage) =>
+			listener(taskId, toAgentTokenUsage(tokenUsage))
+		const cleanup = this._service.subscribeToTokenUsageUpdated(wrapper)
+		this._cleanups.push(cleanup)
+		return cleanup
+	}
+
+	onToolCallFailed(listener: (taskId: string, toolName: string, errorMessage: string) => void): () => void {
+		const cleanup = this._service.subscribeToToolFailed(listener)
+		this._cleanups.push(cleanup)
+		return cleanup
+	}
+
+	onLlmError(listener: (taskId: string, errorMessage: string) => void): () => void {
+		const cleanup = this._service.subscribeToLlmError(listener)
+		this._cleanups.push(cleanup)
+		return cleanup
+	}
+
+	// ── Tool registration ────────────────────────────────────────────────────
+
+	registerTool(definition: AgentToolDefinition): () => void {
+		const namespacedName = `${this.manifest.id}/${definition.name}`
+		// Adapt AgentToolDefinition → CustomToolDefinition:
+		// - parameters is omitted (AgentToolDefinition uses plain JSON Schema while
+		//   CustomToolDefinition expects a Zod schema; args are passed through as-is)
+		// - execute context is bridged from CustomToolContext to AgentToolContext
+		const customDef: CustomToolDefinition = {
+			name: namespacedName,
+			description: definition.description,
+			execute: async (args: unknown, ctx) =>
+				definition.execute(args, { taskId: ctx.task.taskId, mode: ctx.mode }),
+		}
+		customToolRegistry.register(customDef, `plugin:${this.manifest.id}`)
+		const cleanup = () => {
+			customToolRegistry.unregister(namespacedName)
+		}
+		this._cleanups.push(cleanup)
+		return cleanup
+	}
+
+	// ── Private helpers ──────────────────────────────────────────────────────
+
+	/** Register a Roo-native CustomToolDefinition directly (used for manifest.tools). */
+	private _registerNativeTool(definition: CustomToolDefinition): () => void {
 		const namespacedName = `${this.manifest.id}/${definition.name}`
 		const namespacedDef: CustomToolDefinition = { ...definition, name: namespacedName }
-
 		customToolRegistry.register(namespacedDef, `plugin:${this.manifest.id}`)
-
-		const disposable: RooDisposable = {
-			dispose: () => {
-				customToolRegistry.unregister(namespacedName)
-			},
+		return () => {
+			customToolRegistry.unregister(namespacedName)
 		}
-
-		this._disposables.push(disposable)
-		return disposable
 	}
 
-	async registerMcpServer(name: string, config: PluginMcpServerConfig): Promise<RooDisposable> {
-		const disposable = await this._service.registerPluginMcpServer(this.manifest.id, name, config)
-		this._disposables.push(disposable)
-		return disposable
+	// ── MCP server registration ──────────────────────────────────────────────
+
+	async registerMcpServer(name: string, config: PluginMcpServerConfig): Promise<() => void> {
+		const cleanup = await this._service.registerPluginMcpServer(this.manifest.id, name, config)
+		this._cleanups.push(cleanup)
+		return cleanup
 	}
 
-	onTokenUsageUpdated(
-		listener: (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void,
-	): RooDisposable {
-		const disposable = this._service.subscribeToTokenUsageUpdated(listener)
-		this._disposables.push(disposable)
-		return disposable
-	}
+	// ── Webview panel message bus ────────────────────────────────────────────
 
-	onToolFailed(listener: (taskId: string, toolName: ToolName, errorMessage: string) => void): RooDisposable {
-		const disposable = this._service.subscribeToToolFailed(listener)
-		this._disposables.push(disposable)
-		return disposable
-	}
-
-	// ── Phase 4: Plugin Panel Message Bus ──────────────────────────────────
-
-	registerPanelView(view: RooWebviewView): RooDisposable {
+	registerPanelView(view: RooWebviewView): () => void {
 		// Detach any previously registered view.
-		this._panelViewDisposable?.dispose()
+		this._panelViewCleanup?.()
 
 		this._panelView = view
 
-		// Wire incoming messages from the webview to all panel listeners.
 		const msgDisposable = view.webview.onDidReceiveMessage((message) => {
 			for (const listener of this._panelListeners) {
 				try {
@@ -132,45 +290,33 @@ class RooPluginHandleImpl implements RooPluginHandle {
 			}
 		})
 
-		const disposable: RooDisposable = {
-			dispose: () => {
-				msgDisposable.dispose()
-				if (this._panelView === view) {
-					this._panelView = undefined
-				}
-				this._panelViewDisposable = undefined
-			},
+		const cleanup = () => {
+			msgDisposable.dispose()
+			if (this._panelView === view) {
+				this._panelView = undefined
+			}
+			this._panelViewCleanup = undefined
 		}
 
-		this._panelViewDisposable = disposable
-		this._disposables.push(disposable)
-		return disposable
+		this._panelViewCleanup = cleanup
+		this._cleanups.push(cleanup)
+		return cleanup
 	}
 
 	async postMessageToPanel(message: unknown): Promise<void> {
 		await this._panelView?.webview.postMessage(message)
 	}
 
-	onMessageFromPanel(listener: (message: unknown) => void): RooDisposable {
+	onMessageFromPanel(listener: (message: unknown) => void): () => void {
 		this._panelListeners.add(listener)
-		const disposable: RooDisposable = {
-			dispose: () => {
-				this._panelListeners.delete(listener)
-			},
+		const cleanup = () => {
+			this._panelListeners.delete(listener)
 		}
-		this._disposables.push(disposable)
-		return disposable
+		this._cleanups.push(cleanup)
+		return cleanup
 	}
 
-	// ── Phase 5: Agent Communication ────────────────────────────────────────
-
-	onAgentMessage(
-		listener: (taskId: string, action: "created" | "updated", message: ClineMessage) => void,
-	): RooDisposable {
-		const disposable = this._service.subscribeToAgentMessages(listener)
-		this._disposables.push(disposable)
-		return disposable
-	}
+	// ── Lifecycle ────────────────────────────────────────────────────────────
 
 	dispose(): void {
 		if (this._disposed) {
@@ -179,9 +325,9 @@ class RooPluginHandleImpl implements RooPluginHandle {
 
 		this._disposed = true
 
-		for (const d of this._disposables) {
+		for (const cleanup of this._cleanups) {
 			try {
-				d.dispose()
+				cleanup()
 			} catch {
 				// Best-effort cleanup.
 			}
@@ -206,11 +352,12 @@ export class RooPluginServiceImpl implements RooPluginService {
 	private readonly _toolFailedListeners = new Set<
 		(taskId: string, toolName: ToolName, errorMessage: string) => void
 	>()
+	private readonly _llmErrorListeners = new Set<(taskId: string, errorMessage: string) => void>()
 	private readonly _agentMessageListeners = new Set<
 		(taskId: string, action: "created" | "updated", message: ClineMessage) => void
 	>()
 	private _context: RooTaskContext = makeContext()
-	private readonly _disposables: RooDisposable[] = []
+	private readonly _cleanups: Array<() => void> = []
 
 	constructor(api: RooCodeAPI, getMcpHub: () => McpHub | undefined = () => undefined) {
 		this.api = api
@@ -222,11 +369,7 @@ export class RooPluginServiceImpl implements RooPluginService {
 	 * Registers a plugin-contributed MCP server.
 	 * Called from RooPluginHandleImpl.registerMcpServer.
 	 */
-	async registerPluginMcpServer(
-		pluginId: string,
-		name: string,
-		config: PluginMcpServerConfig,
-	): Promise<RooDisposable> {
+	async registerPluginMcpServer(pluginId: string, name: string, config: PluginMcpServerConfig): Promise<() => void> {
 		const hub = this._getMcpHub()
 		if (!hub) {
 			throw new Error(
@@ -236,12 +379,10 @@ export class RooPluginServiceImpl implements RooPluginService {
 
 		await hub.registerPluginServer(name, pluginId, config)
 
-		return {
-			dispose: () => {
-				hub.unregisterPluginServer(name).catch((error) => {
-					console.error(`[RooPluginService] Failed to unregister plugin MCP server "${name}":`, error)
-				})
-			},
+		return () => {
+			hub.unregisterPluginServer(name).catch((error) => {
+				console.error(`[RooPluginService] Failed to unregister plugin MCP server "${name}":`, error)
+			})
 		}
 	}
 
@@ -275,43 +416,42 @@ export class RooPluginServiceImpl implements RooPluginService {
 		return { ...this._context }
 	}
 
-	subscribeToContext(listener: (ctx: RooTaskContext) => void): RooDisposable {
+	subscribeToContext(listener: (ctx: RooTaskContext) => void): () => void {
 		this._contextListeners.add(listener)
-		return {
-			dispose: () => {
-				this._contextListeners.delete(listener)
-			},
+		return () => {
+			this._contextListeners.delete(listener)
 		}
 	}
 
 	subscribeToTokenUsageUpdated(
 		listener: (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void,
-	): RooDisposable {
+	): () => void {
 		this._tokenUsageListeners.add(listener)
-		return {
-			dispose: () => {
-				this._tokenUsageListeners.delete(listener)
-			},
+		return () => {
+			this._tokenUsageListeners.delete(listener)
 		}
 	}
 
-	subscribeToToolFailed(listener: (taskId: string, toolName: ToolName, errorMessage: string) => void): RooDisposable {
+	subscribeToToolFailed(listener: (taskId: string, toolName: ToolName, errorMessage: string) => void): () => void {
 		this._toolFailedListeners.add(listener)
-		return {
-			dispose: () => {
-				this._toolFailedListeners.delete(listener)
-			},
+		return () => {
+			this._toolFailedListeners.delete(listener)
+		}
+	}
+
+	subscribeToLlmError(listener: (taskId: string, errorMessage: string) => void): () => void {
+		this._llmErrorListeners.add(listener)
+		return () => {
+			this._llmErrorListeners.delete(listener)
 		}
 	}
 
 	subscribeToAgentMessages(
 		listener: (taskId: string, action: "created" | "updated", message: ClineMessage) => void,
-	): RooDisposable {
+	): () => void {
 		this._agentMessageListeners.add(listener)
-		return {
-			dispose: () => {
-				this._agentMessageListeners.delete(listener)
-			},
+		return () => {
+			this._agentMessageListeners.delete(listener)
 		}
 	}
 
@@ -320,9 +460,9 @@ export class RooPluginServiceImpl implements RooPluginService {
 	}
 
 	dispose(): void {
-		for (const d of this._disposables) {
+		for (const cleanup of this._cleanups) {
 			try {
-				d.dispose()
+				cleanup()
 			} catch {
 				// Best-effort cleanup.
 			}
@@ -443,24 +583,19 @@ export class RooPluginServiceImpl implements RooPluginService {
 		emitter.on(RooCodeEventName.TaskToolFailed, onToolFailed as (...args: unknown[]) => void)
 		emitter.on(RooCodeEventName.Message, onAgentMessage as (...args: unknown[]) => void)
 
-		this._disposables.push(
-			{
-				dispose: () => {
-					emitter.off(RooCodeEventName.TaskStarted, onTaskStarted as (...args: unknown[]) => void)
-					emitter.off(RooCodeEventName.TaskCompleted, onTaskEnded as (...args: unknown[]) => void)
-					emitter.off(RooCodeEventName.TaskAborted, onTaskEnded as (...args: unknown[]) => void)
-					emitter.off(RooCodeEventName.TaskModeSwitched, onModeSwitch as (...args: unknown[]) => void)
-					emitter.off(RooCodeEventName.ModeChanged, onModeChanged as (...args: unknown[]) => void)
-					emitter.off(
-						RooCodeEventName.TaskTokenUsageUpdated,
-						onTokenUsageUpdated as (...args: unknown[]) => void,
-					)
-					emitter.off(RooCodeEventName.TaskToolFailed, onToolFailed as (...args: unknown[]) => void)
-					emitter.off(RooCodeEventName.Message, onAgentMessage as (...args: unknown[]) => void)
-				},
+		this._cleanups.push(
+			() => {
+				emitter.off(RooCodeEventName.TaskStarted, onTaskStarted as (...args: unknown[]) => void)
+				emitter.off(RooCodeEventName.TaskCompleted, onTaskEnded as (...args: unknown[]) => void)
+				emitter.off(RooCodeEventName.TaskAborted, onTaskEnded as (...args: unknown[]) => void)
+				emitter.off(RooCodeEventName.TaskModeSwitched, onModeSwitch as (...args: unknown[]) => void)
+				emitter.off(RooCodeEventName.ModeChanged, onModeChanged as (...args: unknown[]) => void)
+				emitter.off(RooCodeEventName.TaskTokenUsageUpdated, onTokenUsageUpdated as (...args: unknown[]) => void)
+				emitter.off(RooCodeEventName.TaskToolFailed, onToolFailed as (...args: unknown[]) => void)
+				emitter.off(RooCodeEventName.Message, onAgentMessage as (...args: unknown[]) => void)
 			},
-			{ dispose: () => workspaceDisposable.dispose() },
-			{ dispose: () => editorDisposable.dispose() },
+			() => workspaceDisposable.dispose(),
+			() => editorDisposable.dispose(),
 		)
 	}
 }

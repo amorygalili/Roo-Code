@@ -23,6 +23,7 @@
 		"clean": "rimraf dist .turbo"
 	},
 	"dependencies": {
+		"@roo-code/plugin-api": "workspace:^",
 		"zod": "3.25.76"
 	},
 	"devDependencies": {

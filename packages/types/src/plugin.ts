@@ -1,44 +1,35 @@
+import type { AgentPluginManifest, AgentPluginHandle, AgentPluginService } from "@roo-code/plugin-api"
+import type { AgentMcpServerConfig } from "@roo-code/plugin-api"
+
 import type { CustomToolDefinition } from "./custom-tool.js"
-import type { ClineMessage, TokenUsage } from "./message.js"
-import type { ToolName, ToolUsage } from "./tool.js"
+import type { TokenUsage } from "./message.js"
+import type { ToolUsage } from "./tool.js"
+
+// Re-export agent-agnostic types so plugin authors can import them from @roo-code/types.
+export type { AgentPluginManifest, AgentPluginHandle, AgentPluginService } from "@roo-code/plugin-api"
+export type {
+	AgentMessage,
+	AgentSayKind,
+	AgentAskKind,
+	AgentTokenUsage,
+	AgentMcpServerConfig,
+	AgentTaskContext,
+	AgentToolDefinition,
+	AgentToolContext,
+	JsonSchema,
+	AgentProfile,
+	AgentProfileManager,
+} from "@roo-code/plugin-api"
 
 /**
  * Configuration for an MCP server registered by a plugin.
- * Mirrors the subset of McpHub's ServerConfigSchema that plugins may supply.
+ * This is an alias for the agent-agnostic AgentMcpServerConfig from @roo-code/plugin-api.
  */
-export type PluginMcpServerConfig =
-	| {
-			type: "stdio"
-			command: string
-			args?: string[]
-			env?: Record<string, string>
-			cwd?: string
-			disabled?: boolean
-			timeout?: number
-			alwaysAllow?: string[]
-			disabledTools?: string[]
-	  }
-	| {
-			type: "sse"
-			url: string
-			headers?: Record<string, string>
-			disabled?: boolean
-			timeout?: number
-			alwaysAllow?: string[]
-			disabledTools?: string[]
-	  }
-	| {
-			type: "streamable-http"
-			url: string
-			headers?: Record<string, string>
-			disabled?: boolean
-			timeout?: number
-			alwaysAllow?: string[]
-			disabledTools?: string[]
-	  }
+export type PluginMcpServerConfig = AgentMcpServerConfig
 
 /**
  * Minimal disposable interface (mirrors vscode.Disposable without the dependency).
+ * @deprecated Use `() => void` cleanup functions instead for environment-agnostic code.
  */
 export interface RooDisposable {
 	dispose(): void
@@ -50,7 +41,7 @@ export interface RooDisposable {
  */
 export interface RooWebview {
 	postMessage(message: unknown): Promise<boolean>
-	onDidReceiveMessage(listener: (message: unknown) => void): RooDisposable
+	onDidReceiveMessage(listener: (message: unknown) => void): { dispose(): void }
 }
 
 /**
@@ -87,86 +78,30 @@ export interface RooTaskContext {
 
 /**
  * Declarative manifest contributed by a plugin.
+ * Extends `AgentPluginManifest` with Roo Code-specific fields.
  * Plugins may optionally provide this in their package.json under
  * `contributes["roo-code"]`, or supply it programmatically to `register()`.
  */
-export interface RooPluginManifest {
-	/** Unique plugin identifier — must be the VS Code extension ID (publisher.name). */
-	id: string
-	/** Human-readable plugin name shown in Roo's UI. */
-	displayName: string
-	/** Optional short description of the plugin's purpose. */
-	description?: string
+export interface RooPluginManifest extends AgentPluginManifest {
 	/** Tool definitions contributed by this plugin. */
 	tools?: CustomToolDefinition[]
 }
 
 /**
- * Handle returned to a plugin after successful registration.
- * All subscriptions and contributions scoped to this handle are automatically
- * cleaned up when `dispose()` is called.
+ * Roo Code-specific extension of `AgentPluginHandle`.
+ *
+ * Adds VS Code webview panel integration on top of the agent-agnostic base.
+ * All core capabilities (task management, messaging, tool registration, etc.)
+ * are inherited from `AgentPluginHandle`.
+ *
+ * The `manifest` property is narrowed to `RooPluginManifest` so callers can
+ * access Roo-specific manifest fields (e.g. `tools`).
  */
-export interface RooPluginHandle extends RooDisposable {
-	/** The manifest this handle was registered with. */
+export interface RooPluginHandle extends AgentPluginHandle {
+	/** The manifest this handle was registered with (Roo-specific superset). */
 	readonly manifest: RooPluginManifest
 
-	/**
-	 * Returns a snapshot of the current agent context.
-	 * Safe to call at any time; returns defaults when no task is active.
-	 */
-	getContext(): RooTaskContext
-
-	/**
-	 * Subscribe to context changes.
-	 * The callback is invoked whenever the agent state changes
-	 * (e.g. a new task starts, the mode changes, the workspace changes).
-	 *
-	 * @returns A disposable to unsubscribe.
-	 */
-	onContextChange(listener: (context: RooTaskContext) => void): RooDisposable
-
-	/**
-	 * Send a text message to the currently active task, as if the user had typed it.
-	 * No-op when no task is active.
-	 */
-	sendMessageToAgent(message: string, images?: string[]): Promise<void>
-
-	/**
-	 * Register an additional tool at runtime.
-	 * The tool name will be automatically namespaced as `<pluginId>/<toolName>`.
-	 *
-	 * @returns A disposable that unregisters the tool when disposed.
-	 */
-	registerTool(definition: CustomToolDefinition): RooDisposable
-
-	/**
-	 * Register an MCP server with Roo Code.
-	 * The server will appear in Roo's MCP server list alongside global and project servers.
-	 * It will be automatically unregistered when the returned disposable (or the handle itself) is disposed.
-	 *
-	 * @param name - Unique name for this MCP server.
-	 * @param config - Server configuration (stdio, sse, or streamable-http).
-	 * @returns A promise that resolves to a disposable that unregisters the server when disposed.
-	 */
-	registerMcpServer(name: string, config: PluginMcpServerConfig): Promise<RooDisposable>
-
-	/**
-	 * Subscribe to live token/tool usage updates for the active task.
-	 * Called each time the agent reports new token counts (roughly after each LLM request).
-	 *
-	 * @returns A disposable to unsubscribe.
-	 */
-	onTokenUsageUpdated(listener: (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void): RooDisposable
-
-	/**
-	 * Subscribe to tool-failure events.
-	 * Called whenever a tool invocation fails inside the active task.
-	 *
-	 * @returns A disposable to unsubscribe.
-	 */
-	onToolFailed(listener: (taskId: string, toolName: ToolName, errorMessage: string) => void): RooDisposable
-
-	// ── Phase 4: Plugin Panel Message Bus ────────────────────────────────────
+	// ── Webview panel message bus (VS Code–specific) ──────────────────────────
 
 	/**
 	 * Register a webview view (sidebar panel or editor panel) with this plugin's handle.
@@ -174,9 +109,9 @@ export interface RooPluginHandle extends RooDisposable {
 	 * Once registered, `postMessageToPanel` and `onMessageFromPanel` become active.
 	 *
 	 * @param view - The `vscode.WebviewView` handed to you by VS Code.
-	 * @returns A disposable that unregisters the view.
+	 * @returns A cleanup function that unregisters the view.
 	 */
-	registerPanelView(view: RooWebviewView): RooDisposable
+	registerPanelView(view: RooWebviewView): () => void
 
 	/**
 	 * Post a message to the plugin's registered webview panel.
@@ -187,35 +122,21 @@ export interface RooPluginHandle extends RooDisposable {
 	postMessageToPanel(message: unknown): Promise<void>
 
 	/**
-	 * Subscribe to messages sent by the plugin's webview panel via `acquireVsCodeApi().postMessage()`.
-	 * No-op (returns a no-op disposable) if no panel view has been registered yet;
-	 * listeners registered before `registerPanelView` are attached automatically once the view arrives.
+	 * Subscribe to messages sent by the plugin's webview panel.
+	 * Listeners registered before `registerPanelView` are attached automatically once the view arrives.
 	 *
-	 * @returns A disposable to unsubscribe.
+	 * @returns A cleanup function that removes the listener when called.
 	 */
-	onMessageFromPanel(listener: (message: unknown) => void): RooDisposable
-
-	// ── Phase 5: Agent Communication ─────────────────────────────────────────
-
-	/**
-	 * Subscribe to messages emitted by the agent during any active task.
-	 * The listener receives the raw `ClineMessage` (which includes `type`, `say`, `ask`, `text`, etc.)
-	 * together with the `taskId` and whether the message was `"created"` or `"updated"`.
-	 *
-	 * Useful for logging, external syncing, or driving custom UI that mirrors the conversation.
-	 *
-	 * @returns A disposable to unsubscribe.
-	 */
-	onAgentMessage(
-		listener: (taskId: string, action: "created" | "updated", message: ClineMessage) => void,
-	): RooDisposable
+	onMessageFromPanel(listener: (message: unknown) => void): () => void
 }
 
 /**
- * The public plugin service exposed on `RooCodeAPI.plugins`.
- * Third-party extensions use this to register themselves with Roo Code.
+ * Roo Code-specific extension of `AgentPluginService`.
+ *
+ * Narrows the `register()` return type to `RooPluginHandle` so callers
+ * get access to VS Code panel methods without having to cast.
  */
-export interface RooPluginService {
+export interface RooPluginService extends AgentPluginService {
 	/**
 	 * Register a plugin with Roo Code.
 	 *
