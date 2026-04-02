@@ -9,7 +9,7 @@ import { StandardTooltip, ToggleSwitch } from "@/components/ui"
 type McpToolRowProps = {
 	tool: McpTool
 	serverName?: string
-	serverSource?: "global" | "project"
+	serverSource?: "global" | "project" | "plugin"
 	alwaysAllowMcp?: boolean
 	isInChatContext?: boolean
 }

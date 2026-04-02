@@ -4,15 +4,16 @@ A VS Code extension that demonstrates all major Roo Code plugin API features ins
 
 The panel UI is built with **Vite + React + TypeScript** and lives in `webview-ui/`. The extension host (`src/extension.ts`) loads the compiled assets at runtime via `webview.asWebviewUri`.
 
-| Feature                  | Where it shows up                                                              |
-| ------------------------ | ------------------------------------------------------------------------------ |
-| **Tool registration**    | `word_count` and `get_datetime` tools available to the agent                   |
-| **Context subscription** | Live mode / task ID / workspace / open-files display in the panel + status bar |
-| **Token usage tracking** | Cumulative token counts and cost, updated in real time in the panel            |
-| **Tool failure alerts**  | Failed tool invocations logged in the panel and shown as VS Code notifications |
-| **Agent message stream** | Live assistant transcript rendered in the panel                                |
-| **Panel message bus**    | Bidirectional ping/pong between the panel webview and extension host           |
-| **Agent messaging**      | Panel textarea and "Ask Date & Time" button send messages to the active task   |
+| Feature                     | Where it shows up                                                              |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| **Tool registration**       | `word_count` and `get_datetime` tools available to the agent                   |
+| **Context subscription**    | Live mode / task ID / workspace / open-files display in the panel + status bar |
+| **Token usage tracking**    | Cumulative token counts and cost, updated in real time in the panel            |
+| **Tool failure alerts**     | Failed tool invocations logged in the panel and shown as VS Code notifications |
+| **Agent message stream**    | Live assistant transcript rendered in the panel                                |
+| **Panel message bus**       | Bidirectional ping/pong between the panel webview and extension host           |
+| **Agent messaging**         | Panel textarea and "Ask Date & Time" button send messages to the active task   |
+| **MCP server registration** | `plugin-time-server` (`mcp-server-time`) registered via the plugin API         |
 
 ---
 
@@ -82,7 +83,26 @@ The **Context** section of the panel (and the status bar item) update automatica
 - **Open or close files** → Open Files list refreshes.
 - **End the task** → Task reverts to `idle`.
 
-### 2. Custom tools — `word_count` and `get_datetime`
+### 2. MCP server — `plugin-time-server`
+
+The plugin registers the [`mcp-server-time`](https://github.com/modelcontextprotocol/servers/tree/main/src/time) server with Roo Code via `handle.registerMcpServer()`.
+This requires [`uvx`](https://docs.astral.sh/uv/) (part of the `uv` Python toolchain):
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Once registered, the server appears in Roo's **MCP** settings tab alongside global and project servers (labelled with its plugin source). With a task active, you can ask the agent:
+
+> _"What time is it in Tokyo right now?"_ > _"Convert 3 PM UTC to New York time."_
+
+The server is automatically unregistered when the example extension deactivates.
+
+### 3. Custom tools — `word_count` and `get_datetime`
 
 With a task active, ask the agent to use the registered tools via the Roo chat:
 
@@ -93,19 +113,19 @@ The agent will invoke the tool and return the result. Tool names are namespaced:
 - `example.roo-plugin-example/word_count`
 - `example.roo-plugin-example/get_datetime`
 
-### 3. Token usage
+### 4. Token usage
 
 Every time the agent makes an LLM request the **Token Usage** section updates live with token counts and accumulated cost. The status bar also shows the running cost (`· $0.0123`).
 
-### 4. Tool failure alerts
+### 5. Tool failure alerts
 
 If a tool invocation fails, the failure is shown in the **Tool Failures** section of the panel and as a VS Code warning notification.
 
-### 5. Agent message stream
+### 6. Agent message stream
 
 The **Agent Messages** section shows a live, scrollable transcript of the assistant's replies. Only final (non-partial) `say/text` messages are rendered. Click **Clear** to reset the log.
 
-### 6. Send to Agent — panel textarea
+### 7. Send to Agent — panel textarea
 
 1. Start a Roo task.
 2. Type any message in the **Send to Agent** textarea.
@@ -116,7 +136,7 @@ Click **Ask Date & Time** to fire a pre-canned message without typing.
 
 The same action is also available via the Command Palette: **"Roo: Ask Agent for Current Date & Time"**.
 
-### 7. Panel message bus — ping/pong
+### 8. Panel message bus — ping/pong
 
 **Panel → Extension Host:**
 

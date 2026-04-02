@@ -52,7 +52,7 @@ export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 		this.outputChannel = outputChannel
 		this.sidebarProvider = provider
 		this.context = provider.context
-		this.plugins = new RooPluginServiceImpl(this)
+		this.plugins = new RooPluginServiceImpl(this, () => provider.getMcpHub())
 
 		if (enableLogging) {
 			this.log = (...args: unknown[]) => {

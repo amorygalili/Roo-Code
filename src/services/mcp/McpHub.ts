@@ -162,6 +162,8 @@ export class McpHub {
 	private flagResetTimer?: NodeJS.Timeout
 	private sanitizedNameRegistry: Map<string, string> = new Map()
 	private initializationPromise: Promise<void>
+	/** Plugin-registered servers keyed by server name, with their owning plugin ID and raw config stored for re-registration after refreshes. */
+	private pluginServers: Map<string, { pluginId: string; config: z.infer<typeof ServerConfigSchema> }> = new Map()
 
 	constructor(provider: ClineProvider) {
 		this.providerRef = new WeakRef(provider)
@@ -620,7 +622,7 @@ export class McpHub {
 	private createPlaceholderConnection(
 		name: string,
 		config: z.infer<typeof ServerConfigSchema>,
-		source: "global" | "project",
+		source: "global" | "project" | "plugin",
 		reason: DisableReason,
 	): DisconnectedMcpConnection {
 		return {
@@ -655,7 +657,7 @@ export class McpHub {
 	private async connectToServer(
 		name: string,
 		config: z.infer<typeof ServerConfigSchema>,
-		source: "global" | "project" = "global",
+		source: "global" | "project" | "plugin" = "global",
 	): Promise<void> {
 		// Remove existing connection if it exists with the same source
 		await this.deleteConnection(name, source)
@@ -928,13 +930,13 @@ export class McpHub {
 	 * @param source Optional source to filter by (global or project)
 	 * @returns The matching connection or undefined if not found
 	 */
-	private findConnection(serverName: string, source?: "global" | "project"): McpConnection | undefined {
+	private findConnection(serverName: string, source?: "global" | "project" | "plugin"): McpConnection | undefined {
 		// If source is specified, only find servers with that source
 		if (source !== undefined) {
 			return this.connections.find((conn) => conn.server.name === serverName && conn.server.source === source)
 		}
 
-		// If no source is specified, first look for project servers, then global servers
+		// If no source is specified, first look for project servers, then global servers, then plugin servers
 		// This ensures that when servers have the same name, project servers are prioritized
 		const projectConn = this.connections.find(
 			(conn) => conn.server.name === serverName && conn.server.source === "project",
@@ -942,9 +944,13 @@ export class McpHub {
 		if (projectConn) return projectConn
 
 		// If no project server is found, look for global servers
-		return this.connections.find(
+		const globalConn = this.connections.find(
 			(conn) => conn.server.name === serverName && (conn.server.source === "global" || !conn.server.source),
 		)
+		if (globalConn) return globalConn
+
+		// Finally, look for plugin servers
+		return this.connections.find((conn) => conn.server.name === serverName && conn.server.source === "plugin")
 	}
 
 	/**
@@ -977,7 +983,7 @@ export class McpHub {
 		return null
 	}
 
-	private async fetchToolsList(serverName: string, source?: "global" | "project"): Promise<McpTool[]> {
+	private async fetchToolsList(serverName: string, source?: "global" | "project" | "plugin"): Promise<McpTool[]> {
 		try {
 			// Use the helper method to find the connection
 			const connection = this.findConnection(serverName, source)
@@ -994,30 +1000,39 @@ export class McpHub {
 			let alwaysAllowConfig: string[] = []
 			let disabledToolsList: string[] = []
 
-			// Read from the appropriate config file based on the actual source
-			try {
-				let serverConfigData: Record<string, any> = {}
-				if (actualSource === "project") {
-					// Get project MCP config path
-					const projectMcpPath = await this.getProjectMcpPath()
-					if (projectMcpPath) {
-						configPath = projectMcpPath
+			// Plugin servers don't have config files — read alwaysAllow/disabledTools from stored config instead
+			if (actualSource === "plugin") {
+				const pluginEntry = this.pluginServers.get(serverName)
+				if (pluginEntry) {
+					alwaysAllowConfig = (pluginEntry.config as any).alwaysAllow || []
+					disabledToolsList = (pluginEntry.config as any).disabledTools || []
+				}
+			} else {
+				// Read from the appropriate config file based on the actual source
+				try {
+					let serverConfigData: Record<string, any> = {}
+					if (actualSource === "project") {
+						// Get project MCP config path
+						const projectMcpPath = await this.getProjectMcpPath()
+						if (projectMcpPath) {
+							configPath = projectMcpPath
+							const content = await fs.readFile(configPath, "utf-8")
+							serverConfigData = JSON.parse(content)
+						}
+					} else {
+						// Get global MCP settings path
+						configPath = await this.getMcpSettingsFilePath()
 						const content = await fs.readFile(configPath, "utf-8")
 						serverConfigData = JSON.parse(content)
 					}
-				} else {
-					// Get global MCP settings path
-					configPath = await this.getMcpSettingsFilePath()
-					const content = await fs.readFile(configPath, "utf-8")
-					serverConfigData = JSON.parse(content)
+					if (serverConfigData) {
+						alwaysAllowConfig = serverConfigData.mcpServers?.[serverName]?.alwaysAllow || []
+						disabledToolsList = serverConfigData.mcpServers?.[serverName]?.disabledTools || []
+					}
+				} catch (error) {
+					console.error(`Failed to read tool configuration for ${serverName}:`, error)
+					// Continue with empty configs
 				}
-				if (serverConfigData) {
-					alwaysAllowConfig = serverConfigData.mcpServers?.[serverName]?.alwaysAllow || []
-					disabledToolsList = serverConfigData.mcpServers?.[serverName]?.disabledTools || []
-				}
-			} catch (error) {
-				console.error(`Failed to read tool configuration for ${serverName}:`, error)
-				// Continue with empty configs
 			}
 
 			// Check if wildcard "*" is in the alwaysAllow config
@@ -1037,7 +1052,10 @@ export class McpHub {
 		}
 	}
 
-	private async fetchResourcesList(serverName: string, source?: "global" | "project"): Promise<McpResource[]> {
+	private async fetchResourcesList(
+		serverName: string,
+		source?: "global" | "project" | "plugin",
+	): Promise<McpResource[]> {
 		try {
 			const connection = this.findConnection(serverName, source)
 			if (!connection || connection.type !== "connected") {
@@ -1053,7 +1071,7 @@ export class McpHub {
 
 	private async fetchResourceTemplatesList(
 		serverName: string,
-		source?: "global" | "project",
+		source?: "global" | "project" | "plugin",
 	): Promise<McpResourceTemplate[]> {
 		try {
 			const connection = this.findConnection(serverName, source)
@@ -1071,7 +1089,7 @@ export class McpHub {
 		}
 	}
 
-	async deleteConnection(name: string, source?: "global" | "project"): Promise<void> {
+	async deleteConnection(name: string, source?: "global" | "project" | "plugin"): Promise<void> {
 		// Clean up file watchers for this server
 		this.removeFileWatchersForServer(name)
 
@@ -1178,8 +1196,10 @@ export class McpHub {
 	private setupFileWatcher(
 		name: string,
 		config: z.infer<typeof ServerConfigSchema>,
-		source: "global" | "project" = "global",
+		source: "global" | "project" | "plugin" = "global",
 	) {
+		// Plugin servers are purely in-memory; there is no config file to watch.
+		if (source === "plugin") return
 		// Initialize an empty array for this server if it doesn't exist
 		if (!this.fileWatchers.has(name)) {
 			this.fileWatchers.set(name, [])
@@ -1251,7 +1271,7 @@ export class McpHub {
 		}
 	}
 
-	async restartConnection(serverName: string, source?: "global" | "project"): Promise<void> {
+	async restartConnection(serverName: string, source?: "global" | "project" | "plugin"): Promise<void> {
 		this.isConnecting = true
 
 		// Check if MCP is globally enabled
@@ -1311,6 +1331,17 @@ export class McpHub {
 			await this.initializeMcpServers("global")
 			await this.initializeMcpServers("project")
 
+			// Track plugin servers as disabled placeholders
+			for (const [name, entry] of this.pluginServers.entries()) {
+				const connection = this.createPlaceholderConnection(
+					name,
+					entry.config,
+					"plugin",
+					DisableReason.MCP_DISABLED,
+				)
+				this.connections.push(connection)
+			}
+
 			await this.notifyWebviewOfServerChanges()
 			return
 		}
@@ -1353,6 +1384,15 @@ export class McpHub {
 			await this.initializeMcpServers("global")
 			await this.initializeMcpServers("project")
 
+			// Re-register plugin servers that were cleared during the refresh
+			for (const [name, entry] of this.pluginServers.entries()) {
+				try {
+					await this.connectToServer(name, entry.config, "plugin")
+				} catch (error) {
+					this.showErrorMessage(`Failed to re-register plugin MCP server "${name}"`, error)
+				}
+			}
+
 			await delay(100)
 
 			await this.notifyWebviewOfServerChanges()
@@ -1361,6 +1401,38 @@ export class McpHub {
 		} finally {
 			this.isConnecting = false
 		}
+	}
+
+	/**
+	 * Registers an MCP server contributed by a plugin.
+	 * Plugin servers use source "plugin" and are preserved across refreshAllConnections calls.
+	 *
+	 * @param name - Unique server name.
+	 * @param pluginId - The ID of the plugin registering the server.
+	 * @param rawConfig - Raw server configuration (will be validated via ServerConfigSchema).
+	 */
+	public async registerPluginServer(name: string, pluginId: string, rawConfig: unknown): Promise<void> {
+		const validatedConfig = this.validateServerConfig(rawConfig, name)
+		this.pluginServers.set(name, { pluginId, config: validatedConfig })
+
+		// Register the sanitized name for O(1) lookup
+		const sanitizedName = sanitizeMcpName(name)
+		this.sanitizedNameRegistry.set(sanitizedName, name)
+
+		await this.connectToServer(name, validatedConfig, "plugin")
+		await this.notifyWebviewOfServerChanges()
+	}
+
+	/**
+	 * Unregisters a plugin-contributed MCP server by name.
+	 * No-op if the server is not found.
+	 *
+	 * @param name - The server name to unregister.
+	 */
+	public async unregisterPluginServer(name: string): Promise<void> {
+		this.pluginServers.delete(name)
+		await this.deleteConnection(name, "plugin")
+		await this.notifyWebviewOfServerChanges()
 	}
 
 	private async notifyWebviewOfServerChanges(): Promise<void> {
@@ -1383,25 +1455,33 @@ export class McpHub {
 			}
 		}
 
-		// Sort connections: first project servers in their defined order, then global servers in their defined order
+		// Sort connections: project servers first, then global, then plugin servers
 		// This ensures that when servers have the same name, project servers are prioritized
 		const sortedConnections = [...this.connections].sort((a, b) => {
-			const aIsGlobal = a.server.source === "global" || !a.server.source
-			const bIsGlobal = b.server.source === "global" || !b.server.source
+			const aSource = a.server.source || "global"
+			const bSource = b.server.source || "global"
 
-			// If both are global or both are project, sort by their respective order
-			if (aIsGlobal && bIsGlobal) {
+			const sourceOrder = { project: 0, global: 1, plugin: 2 }
+			const aOrder = sourceOrder[aSource as keyof typeof sourceOrder] ?? 3
+			const bOrder = sourceOrder[bSource as keyof typeof sourceOrder] ?? 3
+
+			if (aOrder !== bOrder) {
+				return aOrder - bOrder
+			}
+
+			// Within same source, sort by their defined order
+			if (aSource === "global") {
 				const indexA = globalServerOrder.indexOf(a.server.name)
 				const indexB = globalServerOrder.indexOf(b.server.name)
 				return indexA - indexB
-			} else if (!aIsGlobal && !bIsGlobal) {
+			} else if (aSource === "project") {
 				const indexA = projectServerOrder.indexOf(a.server.name)
 				const indexB = projectServerOrder.indexOf(b.server.name)
 				return indexA - indexB
 			}
 
-			// Project servers come before global servers (reversed from original)
-			return aIsGlobal ? 1 : -1
+			// Plugin servers: stable sort by name
+			return a.server.name.localeCompare(b.server.name)
 		})
 
 		// Send sorted servers to webview
@@ -1430,7 +1510,7 @@ export class McpHub {
 	public async toggleServerDisabled(
 		serverName: string,
 		disabled: boolean,
-		source?: "global" | "project",
+		source?: "global" | "project" | "plugin",
 	): Promise<void> {
 		try {
 			// Find the connection to determine if it's a global or project server
@@ -1440,8 +1520,11 @@ export class McpHub {
 			}
 
 			const serverSource = connection.server.source || "global"
-			// Update the server config in the appropriate file
-			await this.updateServerConfig(serverName, { disabled }, serverSource)
+
+			// Plugin servers are in-memory only — skip config-file persistence.
+			if (serverSource !== "plugin") {
+				await this.updateServerConfig(serverName, { disabled }, serverSource as "global" | "project")
+			}
 
 			// Update the connection object
 			if (connection) {
@@ -1454,13 +1537,30 @@ export class McpHub {
 						this.removeFileWatchersForServer(serverName)
 						await this.deleteConnection(serverName, serverSource)
 						// Re-add as a disabled connection
-						// Re-read config from file to get updated disabled state
-						const updatedConfig = await this.readServerConfigFromFile(serverName, serverSource)
+						let updatedConfig: z.infer<typeof ServerConfigSchema>
+						if (serverSource === "plugin") {
+							// For plugin servers use the in-memory config (already validated)
+							updatedConfig =
+								this.pluginServers.get(serverName)?.config ?? (connection.server.config as any)
+						} else {
+							updatedConfig = await this.readServerConfigFromFile(
+								serverName,
+								serverSource as "global" | "project",
+							)
+						}
 						await this.connectToServer(serverName, updatedConfig, serverSource)
 					} else if (!disabled && connection.server.status === "disconnected") {
 						// If enabling a disabled server, connect it
-						// Re-read config from file to get updated disabled state
-						const updatedConfig = await this.readServerConfigFromFile(serverName, serverSource)
+						let updatedConfig: z.infer<typeof ServerConfigSchema>
+						if (serverSource === "plugin") {
+							updatedConfig =
+								this.pluginServers.get(serverName)?.config ?? (connection.server.config as any)
+						} else {
+							updatedConfig = await this.readServerConfigFromFile(
+								serverName,
+								serverSource as "global" | "project",
+							)
+						}
 						await this.deleteConnection(serverName, serverSource)
 						// When re-enabling, file watchers will be set up in connectToServer
 						await this.connectToServer(serverName, updatedConfig, serverSource)
@@ -1621,7 +1721,7 @@ export class McpHub {
 	public async updateServerTimeout(
 		serverName: string,
 		timeout: number,
-		source?: "global" | "project",
+		source?: "global" | "project" | "plugin",
 	): Promise<void> {
 		try {
 			// Find the connection to determine if it's a global or project server
@@ -1630,8 +1730,15 @@ export class McpHub {
 				throw new Error(`Server ${serverName}${source ? ` with source ${source}` : ""} not found`)
 			}
 
-			// Update the server config in the appropriate file
-			await this.updateServerConfig(serverName, { timeout }, connection.server.source || "global")
+			const serverSource = connection.server.source || "global"
+
+			// Plugin servers are in-memory only — skip config-file persistence.
+			if (serverSource !== "plugin") {
+				await this.updateServerConfig(serverName, { timeout }, serverSource as "global" | "project")
+			} else {
+				// For plugin servers, update the in-memory timeout directly.
+				connection.server.timeout = timeout
+			}
 
 			await this.notifyWebviewOfServerChanges()
 		} catch (error) {
@@ -1640,7 +1747,7 @@ export class McpHub {
 		}
 	}
 
-	public async deleteServer(serverName: string, source?: "global" | "project"): Promise<void> {
+	public async deleteServer(serverName: string, source?: "global" | "project" | "plugin"): Promise<void> {
 		try {
 			// Find the connection to determine if it's a global or project server
 			const connection = this.findConnection(serverName, source)
@@ -1649,6 +1756,12 @@ export class McpHub {
 			}
 
 			const serverSource = connection.server.source || "global"
+
+			// Plugin servers are in-memory only — delegate to unregisterPluginServer.
+			if (serverSource === "plugin") {
+				await this.unregisterPluginServer(serverName)
+				return
+			}
 			// Determine config file based on server source
 			const isProjectServer = serverSource === "project"
 			let configPath: string

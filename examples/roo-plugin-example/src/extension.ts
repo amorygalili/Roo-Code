@@ -10,6 +10,7 @@
  *   6. Panel message bus        – bidirectional ping/pong between the panel and extension host
  *   7. Agent messaging          – panel textarea sends messages directly to the active task
  *   8. Configuration profiles   – creates and activates a custom API configuration profile
+ *   9. MCP server registration  – registers `mcp-server-time` via the plugin API
  */
 
 import * as vscode from "vscode"
@@ -166,7 +167,33 @@ export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel("Roo Plugin Example")
 	context.subscriptions.push(outputChannel)
 
-	// ── 6. Status bar (secondary display; panel is the primary UI) ───────────
+	// ── 6. Register a plugin MCP server ──────────────────────────────────────
+	// Registers `mcp-server-time` so the agent can query the current time and
+	// convert between timezones using standard MCP tooling. The returned
+	// disposable is pushed to context.subscriptions so VS Code automatically
+	// unregisters the server when the extension deactivates.
+	//
+	// Requires `uvx` (part of the `uv` Python toolchain). Install with:
+	//   curl -LsSf https://astral.sh/uv/install.sh | sh   (macOS / Linux)
+	//   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  (Windows)
+	handle
+		.registerMcpServer("plugin-time-server", {
+			type: "stdio",
+			command: "uvx",
+			args: ["mcp-server-time"],
+		})
+		.then((serverDisposable) => {
+			context.subscriptions.push(serverDisposable)
+			outputChannel.appendLine("[mcp] Registered 'plugin-time-server' (mcp-server-time via uvx)")
+		})
+		.catch((err: unknown) => {
+			outputChannel.appendLine(`[mcp] Failed to register 'plugin-time-server': ${err}`)
+			vscode.window.showWarningMessage(
+				"Roo Plugin Example: Could not register MCP server — ensure 'uvx' is installed.",
+			)
+		})
+
+	// ── 7. Status bar (secondary display; panel is the primary UI) ───────────
 	const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
 	statusBar.tooltip = "Roo Code agent context — open the Roo Plugin Demo panel for details"
 	context.subscriptions.push(statusBar)
@@ -178,7 +205,7 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 	updateStatusBar(handle.getContext())
 
-	// ── 7. Register the sidebar panel ────────────────────────────────────────
+	// ── 8. Register the sidebar panel ────────────────────────────────────────
 	const panelProvider = new RooPluginPanelProvider(context.extensionUri, handle, roo)
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(RooPluginPanelProvider.VIEW_ID, panelProvider, {
@@ -186,13 +213,13 @@ export function activate(context: vscode.ExtensionContext) {
 		}),
 	)
 
-	// ── 8. Context subscription → status bar + panel ─────────────────────────
+	// ── 9. Context subscription → status bar + panel ─────────────────────────
 	handle.onContextChange((ctx) => {
 		updateStatusBar(ctx)
 		handle.postMessageToPanel({ type: "contextUpdate", context: ctx })
 	})
 
-	// ── 9. Token usage → panel ───────────────────────────────────────────────
+	// ── 10. Token usage → panel ──────────────────────────────────────────────
 	// onTokenUsageUpdated fires after each LLM request with live cumulative counts.
 	handle.onTokenUsageUpdated((taskId, tokenUsage, toolUsage) => {
 		const { totalTokensIn, totalTokensOut, totalCost } = tokenUsage
@@ -206,7 +233,7 @@ export function activate(context: vscode.ExtensionContext) {
 		handle.postMessageToPanel({ type: "tokenUsage", taskId, tokenUsage, toolUsage })
 	})
 
-	// ── 10. Tool failures → notification + panel ─────────────────────────────
+	// ── 11. Tool failures → notification + panel ─────────────────────────────
 	// onToolFailed fires whenever a tool invocation fails inside the active task.
 	handle.onToolFailed((taskId, toolName, errorMessage) => {
 		outputChannel.appendLine(`[tool-failed] task=${taskId.slice(0, 8)} tool=${toolName}: ${errorMessage}`)
@@ -214,7 +241,7 @@ export function activate(context: vscode.ExtensionContext) {
 		handle.postMessageToPanel({ type: "toolFailed", taskId, toolName, errorMessage })
 	})
 
-	// ── 11. Agent messages → output channel + panel ──────────────────────────
+	// ── 12. Agent messages → output channel + panel ──────────────────────────
 	// onAgentMessage fires for every message the agent creates or updates.
 	handle.onAgentMessage((taskId, action, message) => {
 		if (message.type === "say" && message.say === "text" && !message.partial && message.text) {
@@ -223,7 +250,7 @@ export function activate(context: vscode.ExtensionContext) {
 		handle.postMessageToPanel({ type: "agentMessage", taskId, action, message })
 	})
 
-	// ── 12. Panel → extension message handling ────────────────────────────────
+	// ── 13. Panel → extension message handling ────────────────────────────────
 	handle.onMessageFromPanel(async (rawMessage) => {
 		outputChannel.appendLine(`[panel → ext] ${JSON.stringify(rawMessage)}`)
 		const msg = rawMessage as { type: string; text?: string; ts?: number }
@@ -268,7 +295,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	})
 
-	// ── 13. Commands ──────────────────────────────────────────────────────────
+	// ── 14. Commands ──────────────────────────────────────────────────────────
 
 	// Ping the panel from the extension host (demonstrates ext → panel direction).
 	context.subscriptions.push(

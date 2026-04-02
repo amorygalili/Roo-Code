@@ -2231,10 +2231,10 @@ export const webviewMessageHandler = async (
 					const yamlContent = await fs.readFile(fileUri[0].fsPath, "utf-8")
 
 					// Import the mode with the specified source level
-					const result = await provider.customModesManager.importModeWithRules(
-						yamlContent,
-						message.source || "project", // Default to project if not specified
-					)
+					// "plugin" is not a valid mode source — fall back to "project".
+					const modeSource =
+						message.source === "global" || message.source === "project" ? message.source : "project"
+					const result = await provider.customModesManager.importModeWithRules(yamlContent, modeSource)
 
 					if (result.success) {
 						// Update state after importing

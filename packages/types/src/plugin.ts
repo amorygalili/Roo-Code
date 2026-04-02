@@ -3,6 +3,41 @@ import type { ClineMessage, TokenUsage } from "./message.js"
 import type { ToolName, ToolUsage } from "./tool.js"
 
 /**
+ * Configuration for an MCP server registered by a plugin.
+ * Mirrors the subset of McpHub's ServerConfigSchema that plugins may supply.
+ */
+export type PluginMcpServerConfig =
+	| {
+			type: "stdio"
+			command: string
+			args?: string[]
+			env?: Record<string, string>
+			cwd?: string
+			disabled?: boolean
+			timeout?: number
+			alwaysAllow?: string[]
+			disabledTools?: string[]
+	  }
+	| {
+			type: "sse"
+			url: string
+			headers?: Record<string, string>
+			disabled?: boolean
+			timeout?: number
+			alwaysAllow?: string[]
+			disabledTools?: string[]
+	  }
+	| {
+			type: "streamable-http"
+			url: string
+			headers?: Record<string, string>
+			disabled?: boolean
+			timeout?: number
+			alwaysAllow?: string[]
+			disabledTools?: string[]
+	  }
+
+/**
  * Minimal disposable interface (mirrors vscode.Disposable without the dependency).
  */
 export interface RooDisposable {
@@ -103,6 +138,17 @@ export interface RooPluginHandle extends RooDisposable {
 	 * @returns A disposable that unregisters the tool when disposed.
 	 */
 	registerTool(definition: CustomToolDefinition): RooDisposable
+
+	/**
+	 * Register an MCP server with Roo Code.
+	 * The server will appear in Roo's MCP server list alongside global and project servers.
+	 * It will be automatically unregistered when the returned disposable (or the handle itself) is disposed.
+	 *
+	 * @param name - Unique name for this MCP server.
+	 * @param config - Server configuration (stdio, sse, or streamable-http).
+	 * @returns A promise that resolves to a disposable that unregisters the server when disposed.
+	 */
+	registerMcpServer(name: string, config: PluginMcpServerConfig): Promise<RooDisposable>
 
 	/**
 	 * Subscribe to live token/tool usage updates for the active task.

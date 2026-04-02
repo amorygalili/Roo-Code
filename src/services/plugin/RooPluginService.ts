@@ -9,6 +9,7 @@ import type {
 	RooDisposable,
 	RooWebviewView,
 	CustomToolDefinition,
+	PluginMcpServerConfig,
 	RooCodeAPI,
 	RooCodeEvents,
 	TokenUsage,
@@ -17,6 +18,8 @@ import type {
 	ClineMessage,
 } from "@roo-code/types"
 import { RooCodeEventName } from "@roo-code/types"
+
+import type { McpHub } from "../mcp/McpHub"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -86,6 +89,12 @@ class RooPluginHandleImpl implements RooPluginHandle {
 			},
 		}
 
+		this._disposables.push(disposable)
+		return disposable
+	}
+
+	async registerMcpServer(name: string, config: PluginMcpServerConfig): Promise<RooDisposable> {
+		const disposable = await this._service.registerPluginMcpServer(this.manifest.id, name, config)
 		this._disposables.push(disposable)
 		return disposable
 	}
@@ -188,6 +197,7 @@ class RooPluginHandleImpl implements RooPluginHandle {
 
 export class RooPluginServiceImpl implements RooPluginService {
 	public readonly api: RooCodeAPI
+	private readonly _getMcpHub: () => McpHub | undefined
 	private readonly _handles = new Map<string, RooPluginHandleImpl>()
 	private readonly _contextListeners = new Set<(ctx: RooTaskContext) => void>()
 	private readonly _tokenUsageListeners = new Set<
@@ -202,9 +212,37 @@ export class RooPluginServiceImpl implements RooPluginService {
 	private _context: RooTaskContext = makeContext()
 	private readonly _disposables: RooDisposable[] = []
 
-	constructor(api: RooCodeAPI) {
+	constructor(api: RooCodeAPI, getMcpHub: () => McpHub | undefined = () => undefined) {
 		this.api = api
+		this._getMcpHub = getMcpHub
 		this._wireEvents()
+	}
+
+	/**
+	 * Registers a plugin-contributed MCP server.
+	 * Called from RooPluginHandleImpl.registerMcpServer.
+	 */
+	async registerPluginMcpServer(
+		pluginId: string,
+		name: string,
+		config: PluginMcpServerConfig,
+	): Promise<RooDisposable> {
+		const hub = this._getMcpHub()
+		if (!hub) {
+			throw new Error(
+				"McpHub is not available yet. Try calling registerMcpServer after the extension has fully activated.",
+			)
+		}
+
+		await hub.registerPluginServer(name, pluginId, config)
+
+		return {
+			dispose: () => {
+				hub.unregisterPluginServer(name).catch((error) => {
+					console.error(`[RooPluginService] Failed to unregister plugin MCP server "${name}":`, error)
+				})
+			},
+		}
 	}
 
 	// -------------------------------------------------------------------------

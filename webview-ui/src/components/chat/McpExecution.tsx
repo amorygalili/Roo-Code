@@ -32,7 +32,7 @@ interface McpExecutionProps {
 			description?: string
 			alwaysAllow?: boolean
 		}>
-		source?: "global" | "project"
+		source?: "global" | "project" | "plugin"
 	}
 	useMcpServer?: ClineAskUseMcpServer
 	alwaysAllowMcp?: boolean
