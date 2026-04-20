@@ -9,14 +9,12 @@
  * (e.g. `agentMessage`, `toolCall`) carry a `type` but no `requestId`.
  */
 
-import type {
-	AgentMcpServerConfig,
-	AgentProfile,
-	AgentTaskContext,
-	AgentTokenUsage,
-	JsonSchema,
-	AgentMessage,
-} from "@roo-code/plugin-api"
+import type { AgentMcpServerConfig } from "./mcp.js"
+import type { AgentProfile } from "./profile.js"
+import type { AgentTaskContext } from "./task.js"
+import type { AgentTokenUsage } from "./token-usage.js"
+import type { JsonSchema } from "./tool.js"
+import type { AgentMessage } from "./message.js"
 
 // ---------------------------------------------------------------------------
 // Wire-safe tool definition (no execute function — that lives on the client)
@@ -122,5 +120,5 @@ export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omi
  */
 export type C2SMessageBody = DistributiveOmit<C2SMessage, "requestId">
 
-// Re-export upstream types that callers may need without importing plugin-api directly
+// Re-export types that callers may need without additional imports
 export type { AgentMessage, AgentProfile, AgentTaskContext, AgentTokenUsage, AgentMcpServerConfig }

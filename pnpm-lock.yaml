@@ -463,6 +463,10 @@ importers:
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@20.17.57)(jiti@2.4.2)(jsdom@26.1.0)(lightningcss@1.30.1)(tsx@4.19.4)(yaml@2.8.0)
 
   examples/roo-plugin-example:
+    dependencies:
+      '@roo-code/plugin-api-v2':
+        specifier: workspace:^
+        version: link:../../packages/plugin-api-v2
     devDependencies:
       '@roo-code/types':
         specifier: workspace:^
@@ -476,6 +480,9 @@ importers:
       '@vscode/vsce':
         specifier: ^3.7.1
         version: 3.7.1
+      esbuild:
+        specifier: '>=0.25.0'
+        version: 0.25.9
       typescript:
         specifier: ^5.7.0
         version: 5.8.3
@@ -736,9 +743,6 @@ importers:
 
   packages/plugin-api-v2:
     dependencies:
-      '@roo-code/plugin-api':
-        specifier: workspace:^
-        version: link:../plugin-api
       ws:
         specifier: ^8.18.2
         version: 8.18.3
@@ -786,9 +790,9 @@ importers:
 
   packages/types:
     dependencies:
-      '@roo-code/plugin-api':
+      '@roo-code/plugin-api-v2':
         specifier: workspace:^
-        version: link:../plugin-api
+        version: link:../plugin-api-v2
       zod:
         specifier: 3.25.76
         version: 3.25.76
@@ -892,6 +896,9 @@ importers:
       '@roo-code/plugin-api':
         specifier: workspace:^
         version: link:../packages/plugin-api
+      '@roo-code/plugin-api-v2':
+        specifier: workspace:^
+        version: link:../packages/plugin-api-v2
       '@roo-code/telemetry':
         specifier: workspace:^
         version: link:../packages/telemetry
@@ -15406,7 +15413,7 @@ snapshots:
       sirv: 3.0.1
       tinyglobby: 0.2.14
       tinyrainbow: 2.0.0
-      vitest: 3.2.4(@types/debug@4.1.12)(@types/node@24.2.1)(@vitest/ui@3.2.4)(jiti@2.4.2)(jsdom@26.1.0)(lightningcss@1.30.1)(tsx@4.19.4)(yaml@2.8.0)
+      vitest: 3.2.4(@types/debug@4.1.12)(@types/node@20.17.57)(@vitest/ui@3.2.4)(jiti@2.4.2)(jsdom@26.1.0)(lightningcss@1.30.1)(tsx@4.19.4)(yaml@2.8.0)
 
   '@vitest/utils@3.2.4':
     dependencies:

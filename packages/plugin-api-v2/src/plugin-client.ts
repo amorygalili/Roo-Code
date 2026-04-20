@@ -40,7 +40,7 @@ import {
 	type S2CMessage,
 	type WireToolContext,
 } from "./protocol.js"
-import type { AgentToolDefinition } from "@roo-code/plugin-api"
+import type { AgentToolDefinition } from "./tool.js"
 
 // ---------------------------------------------------------------------------
 // Internal events emitted to listeners registered via the on* methods

@@ -1,21 +1,13 @@
 import * as vscode from "vscode"
 
 import { customToolRegistry } from "@roo-code/core"
-import type {
-	AgentProfileManager,
-	AgentTaskContext,
-	AgentTokenUsage,
-	AgentMessage,
-	AgentToolDefinition,
-} from "@roo-code/plugin-api"
+import type { AgentTaskContext, AgentTokenUsage, AgentMessage } from "@roo-code/plugin-api-v2"
+import { PluginServer } from "@roo-code/plugin-api-v2"
+import type { PluginServerEvents } from "@roo-code/plugin-api-v2"
 import type {
 	RooPluginService,
-	RooPluginHandle,
-	RooPluginManifest,
 	RooTaskContext,
-	RooWebviewView,
 	CustomToolDefinition,
-	PluginMcpServerConfig,
 	RooCodeAPI,
 	TokenUsage,
 	ToolUsage,
@@ -78,385 +70,36 @@ function toAgentMessage(msg: ClineMessage): AgentMessage {
 }
 
 // ---------------------------------------------------------------------------
-// RooProfileManagerAdapter — wraps RooCodeAPI profile methods into AgentProfileManager
-// ---------------------------------------------------------------------------
-
-class RooProfileManagerAdapter implements AgentProfileManager {
-	constructor(private readonly _api: RooCodeAPI) {}
-
-	getProfiles(): string[] {
-		return this._api.getProfiles()
-	}
-
-	getProfile(name: string) {
-		const entry = this._api.getProfileEntry(name)
-		if (!entry) return undefined
-		return { id: entry.id, name: entry.name, settings: entry as Record<string, unknown> }
-	}
-
-	getActiveProfile(): string | undefined {
-		return this._api.getActiveProfile()
-	}
-
-	getCurrentSettings(): Record<string, unknown> {
-		return this._api.getConfiguration() as Record<string, unknown>
-	}
-
-	async createProfile(name: string, settings: Record<string, unknown> = {}, activate = true): Promise<string> {
-		return await this._api.createProfile(name, settings as Parameters<RooCodeAPI["createProfile"]>[1], activate)
-	}
-
-	async updateProfile(name: string, settings: Record<string, unknown>, activate = true): Promise<string | undefined> {
-		return await this._api.updateProfile(name, settings as Parameters<RooCodeAPI["updateProfile"]>[1], activate)
-	}
-
-	async upsertProfile(name: string, settings: Record<string, unknown>, activate = true): Promise<string | undefined> {
-		return await this._api.upsertProfile(name, settings as Parameters<RooCodeAPI["upsertProfile"]>[1], activate)
-	}
-
-	async deleteProfile(name: string): Promise<void> {
-		await this._api.deleteProfile(name)
-	}
-
-	async setActiveProfile(name: string): Promise<void> {
-		await this._api.setActiveProfile(name)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// RooPluginHandleImpl
-// ---------------------------------------------------------------------------
-
-class RooPluginHandleImpl implements RooPluginHandle {
-	public readonly manifest: RooPluginManifest
-	public readonly profiles: AgentProfileManager
-	private readonly _service: RooPluginServiceImpl
-	private readonly _cleanups: Array<() => void> = []
-	private _disposed = false
-
-	// Panel view state
-	private _panelView: RooWebviewView | undefined = undefined
-	private readonly _panelListeners = new Set<(message: unknown) => void>()
-	private _panelViewCleanup: (() => void) | undefined = undefined
-
-	constructor(manifest: RooPluginManifest, service: RooPluginServiceImpl) {
-		this.manifest = manifest
-		this._service = service
-		this.profiles = new RooProfileManagerAdapter(service.api)
-
-		// Register declarative tools from the manifest.
-		// These are Roo-native CustomToolDefinition objects, so register them
-		// directly with the registry (bypassing the AgentToolDefinition adapter).
-		if (manifest.tools) {
-			for (const tool of manifest.tools) {
-				this._cleanups.push(this._registerNativeTool(tool))
-			}
-		}
-	}
-
-	getContext(): AgentTaskContext {
-		return toAgentContext(this._service.getContext())
-	}
-
-	onContextChange(listener: (context: AgentTaskContext) => void): () => void {
-		const wrapper = (ctx: RooTaskContext) => listener(toAgentContext(ctx))
-		const cleanup = this._service.subscribeToContext(wrapper)
-		this._cleanups.push(cleanup)
-		return cleanup
-	}
-
-	// ── Task management ─────────────────────────────────────────────────────
-
-	async startTask(text?: string, images?: string[]): Promise<string> {
-		return await this._service.api.startNewTask({ text, images })
-	}
-
-	async resumeTask(taskId: string): Promise<void> {
-		await this._service.api.resumeTask(taskId)
-	}
-
-	async setCurrentTask(taskId: string): Promise<void> {
-		await this._service.api.resumeTask(taskId)
-	}
-
-	async cancelCurrentTask(): Promise<void> {
-		await this._service.api.cancelCurrentTask()
-	}
-
-	// ── Messaging ────────────────────────────────────────────────────────────
-
-	async sendMessage(text: string, images?: string[]): Promise<void> {
-		await this._service.api.sendMessage(text, images)
-	}
-
-	/** @deprecated Use `sendMessage()` instead. */
-	async sendMessageToAgent(message: string, images?: string[]): Promise<void> {
-		return this.sendMessage(message, images)
-	}
-
-	async interruptAgent(): Promise<void> {
-		await this._service.api.pressSecondaryButton()
-	}
-
-	onAgentMessage(
-		listener: (taskId: string, action: "created" | "updated", message: AgentMessage) => void,
-	): () => void {
-		const wrapper = (taskId: string, action: "created" | "updated", msg: ClineMessage) =>
-			listener(taskId, action, toAgentMessage(msg))
-		const cleanup = this._service.subscribeToAgentMessages(wrapper)
-		this._cleanups.push(cleanup)
-		return cleanup
-	}
-
-	// ── Token & error events ─────────────────────────────────────────────────
-
-	onTokenUsageUpdated(listener: (taskId: string, usage: AgentTokenUsage) => void): () => void {
-		const wrapper = (taskId: string, tokenUsage: TokenUsage, _toolUsage: ToolUsage) =>
-			listener(taskId, toAgentTokenUsage(tokenUsage))
-		const cleanup = this._service.subscribeToTokenUsageUpdated(wrapper)
-		this._cleanups.push(cleanup)
-		return cleanup
-	}
-
-	onToolCallFailed(listener: (taskId: string, toolName: string, errorMessage: string) => void): () => void {
-		const cleanup = this._service.subscribeToToolFailed(listener)
-		this._cleanups.push(cleanup)
-		return cleanup
-	}
-
-	onLlmError(listener: (taskId: string, errorMessage: string) => void): () => void {
-		const cleanup = this._service.subscribeToLlmError(listener)
-		this._cleanups.push(cleanup)
-		return cleanup
-	}
-
-	// ── Tool registration ────────────────────────────────────────────────────
-
-	registerTool(definition: AgentToolDefinition): () => void {
-		const namespacedName = `${this.manifest.id}/${definition.name}`
-		// Adapt AgentToolDefinition → CustomToolDefinition:
-		// - parameters is omitted (AgentToolDefinition uses plain JSON Schema while
-		//   CustomToolDefinition expects a Zod schema; args are passed through as-is)
-		// - execute context is bridged from CustomToolContext to AgentToolContext
-		const customDef: CustomToolDefinition = {
-			name: namespacedName,
-			description: definition.description,
-			execute: async (args: unknown, ctx) =>
-				definition.execute(args, { taskId: ctx.task.taskId, mode: ctx.mode }),
-		}
-		customToolRegistry.register(customDef, `plugin:${this.manifest.id}`)
-		const cleanup = () => {
-			customToolRegistry.unregister(namespacedName)
-		}
-		this._cleanups.push(cleanup)
-		return cleanup
-	}
-
-	// ── Private helpers ──────────────────────────────────────────────────────
-
-	/** Register a Roo-native CustomToolDefinition directly (used for manifest.tools). */
-	private _registerNativeTool(definition: CustomToolDefinition): () => void {
-		const namespacedName = `${this.manifest.id}/${definition.name}`
-		const namespacedDef: CustomToolDefinition = { ...definition, name: namespacedName }
-		customToolRegistry.register(namespacedDef, `plugin:${this.manifest.id}`)
-		return () => {
-			customToolRegistry.unregister(namespacedName)
-		}
-	}
-
-	// ── MCP server registration ──────────────────────────────────────────────
-
-	async registerMcpServer(name: string, config: PluginMcpServerConfig): Promise<() => void> {
-		const cleanup = await this._service.registerPluginMcpServer(this.manifest.id, name, config)
-		this._cleanups.push(cleanup)
-		return cleanup
-	}
-
-	// ── Webview panel message bus ────────────────────────────────────────────
-
-	registerPanelView(view: RooWebviewView): () => void {
-		// Detach any previously registered view.
-		this._panelViewCleanup?.()
-
-		this._panelView = view
-
-		const msgDisposable = view.webview.onDidReceiveMessage((message) => {
-			for (const listener of this._panelListeners) {
-				try {
-					listener(message)
-				} catch {
-					// Isolate plugin errors.
-				}
-			}
-		})
-
-		const cleanup = () => {
-			msgDisposable.dispose()
-			if (this._panelView === view) {
-				this._panelView = undefined
-			}
-			this._panelViewCleanup = undefined
-		}
-
-		this._panelViewCleanup = cleanup
-		this._cleanups.push(cleanup)
-		return cleanup
-	}
-
-	async postMessageToPanel(message: unknown): Promise<void> {
-		await this._panelView?.webview.postMessage(message)
-	}
-
-	onMessageFromPanel(listener: (message: unknown) => void): () => void {
-		this._panelListeners.add(listener)
-		const cleanup = () => {
-			this._panelListeners.delete(listener)
-		}
-		this._cleanups.push(cleanup)
-		return cleanup
-	}
-
-	// ── Lifecycle ────────────────────────────────────────────────────────────
-
-	dispose(): void {
-		if (this._disposed) {
-			return
-		}
-
-		this._disposed = true
-
-		for (const cleanup of this._cleanups) {
-			try {
-				cleanup()
-			} catch {
-				// Best-effort cleanup.
-			}
-		}
-
-		this._service.unregister(this.manifest.id)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // RooPluginServiceImpl
 // ---------------------------------------------------------------------------
+
+/** Default port for the WebSocket plugin server. */
+const DEFAULT_PLUGIN_SERVER_PORT = 6066
 
 export class RooPluginServiceImpl implements RooPluginService {
 	public readonly api: RooCodeAPI
 	private readonly _getMcpHub: () => McpHub | undefined
-	private readonly _handles = new Map<string, RooPluginHandleImpl>()
-	private readonly _contextListeners = new Set<(ctx: RooTaskContext) => void>()
-	private readonly _tokenUsageListeners = new Set<
-		(taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void
-	>()
-	private readonly _toolFailedListeners = new Set<
-		(taskId: string, toolName: ToolName, errorMessage: string) => void
-	>()
-	private readonly _llmErrorListeners = new Set<(taskId: string, errorMessage: string) => void>()
-	private readonly _agentMessageListeners = new Set<
-		(taskId: string, action: "created" | "updated", message: ClineMessage) => void
-	>()
 	private _context: RooTaskContext = makeContext()
 	private readonly _cleanups: Array<() => void> = []
+
+	/** WebSocket server for remote plugin clients. */
+	private readonly _pluginServer: PluginServer
+	/** Namespaced tool names registered per connected WebSocket client. */
+	private readonly _clientTools = new Map<string, string[]>()
+	/** MCP server names registered per connected WebSocket client. */
+	private readonly _clientMcpServers = new Map<string, string[]>()
 
 	constructor(api: RooCodeAPI, getMcpHub: () => McpHub | undefined = () => undefined) {
 		this.api = api
 		this._getMcpHub = getMcpHub
+		this._pluginServer = new PluginServer({ port: DEFAULT_PLUGIN_SERVER_PORT })
 		this._wireEvents()
+		this._wireServerEvents()
+		this._pluginServer.listen()
 	}
 
-	/**
-	 * Registers a plugin-contributed MCP server.
-	 * Called from RooPluginHandleImpl.registerMcpServer.
-	 */
-	async registerPluginMcpServer(pluginId: string, name: string, config: PluginMcpServerConfig): Promise<() => void> {
-		const hub = this._getMcpHub()
-		if (!hub) {
-			throw new Error(
-				"McpHub is not available yet. Try calling registerMcpServer after the extension has fully activated.",
-			)
-		}
-
-		await hub.registerPluginServer(name, pluginId, config)
-
-		return () => {
-			hub.unregisterPluginServer(name).catch((error) => {
-				console.error(`[RooPluginService] Failed to unregister plugin MCP server "${name}":`, error)
-			})
-		}
-	}
-
-	// -------------------------------------------------------------------------
-	// RooPluginService interface
-	// -------------------------------------------------------------------------
-
-	register(manifest: RooPluginManifest): RooPluginHandle {
-		// Idempotent: if the plugin was already registered (e.g. via declarative
-		// auto-discovery in discoverPlugins), return the existing handle so that
-		// extensions which call register() in their activate() don't get an error.
-		const existing = this._handles.get(manifest.id)
-		if (existing) {
-			return existing
-		}
-
-		const handle = new RooPluginHandleImpl(manifest, this)
-		this._handles.set(manifest.id, handle)
-		return handle
-	}
-
-	getRegisteredPlugins(): RooPluginManifest[] {
-		return Array.from(this._handles.values()).map((h) => h.manifest)
-	}
-
-	// -------------------------------------------------------------------------
-	// Internal helpers used by handles
-	// -------------------------------------------------------------------------
-
-	getContext(): RooTaskContext {
-		return { ...this._context }
-	}
-
-	subscribeToContext(listener: (ctx: RooTaskContext) => void): () => void {
-		this._contextListeners.add(listener)
-		return () => {
-			this._contextListeners.delete(listener)
-		}
-	}
-
-	subscribeToTokenUsageUpdated(
-		listener: (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => void,
-	): () => void {
-		this._tokenUsageListeners.add(listener)
-		return () => {
-			this._tokenUsageListeners.delete(listener)
-		}
-	}
-
-	subscribeToToolFailed(listener: (taskId: string, toolName: ToolName, errorMessage: string) => void): () => void {
-		this._toolFailedListeners.add(listener)
-		return () => {
-			this._toolFailedListeners.delete(listener)
-		}
-	}
-
-	subscribeToLlmError(listener: (taskId: string, errorMessage: string) => void): () => void {
-		this._llmErrorListeners.add(listener)
-		return () => {
-			this._llmErrorListeners.delete(listener)
-		}
-	}
-
-	subscribeToAgentMessages(
-		listener: (taskId: string, action: "created" | "updated", message: ClineMessage) => void,
-	): () => void {
-		this._agentMessageListeners.add(listener)
-		return () => {
-			this._agentMessageListeners.delete(listener)
-		}
-	}
-
-	unregister(pluginId: string): void {
-		this._handles.delete(pluginId)
+	get pluginServerPort(): number {
+		return this._pluginServer.port
 	}
 
 	dispose(): void {
@@ -468,84 +111,59 @@ export class RooPluginServiceImpl implements RooPluginService {
 			}
 		}
 
-		for (const handle of this._handles.values()) {
-			handle.dispose()
-		}
+		this._pluginServer.close().catch((err: unknown) => {
+			console.error("[RooPluginService] Error closing plugin server:", err)
+		})
 	}
 
 	// -------------------------------------------------------------------------
 	// Private
 	// -------------------------------------------------------------------------
 
-	private _notifyListeners(): void {
-		const snapshot = { ...this._context }
-		for (const listener of this._contextListeners) {
-			try {
-				listener(snapshot)
-			} catch {
-				// Isolate plugin errors.
-			}
-		}
+	private _broadcastContext(): void {
+		this._pluginServer.broadcastContextChange(toAgentContext({ ...this._context }))
 	}
 
 	private _wireEvents(): void {
 		// Task lifecycle — update taskId and reset per-task usage stats.
 		const onTaskStarted = (taskId: string) => {
 			this._context = { ...this._context, taskId, tokenUsage: undefined, toolUsage: undefined }
-			this._notifyListeners()
+			this._broadcastContext()
 		}
 
 		const onTaskEnded = (_taskId: string) => {
 			this._context = { ...this._context, taskId: undefined, tokenUsage: undefined, toolUsage: undefined }
-			this._notifyListeners()
+			this._broadcastContext()
 		}
 
 		// TaskModeSwitched fires when the agent switches mode during a task.
 		const onModeSwitch = (_taskId: string, mode: string) => {
 			this._context = { ...this._context, mode }
-			this._notifyListeners()
+			this._broadcastContext()
 		}
 
 		// ModeChanged fires when the user changes mode in the settings UI (outside a task).
 		const onModeChanged = (mode: string) => {
 			this._context = { ...this._context, mode }
-			this._notifyListeners()
+			this._broadcastContext()
 		}
 
 		// TokenUsageUpdated fires after each LLM request with cumulative counts.
 		const onTokenUsageUpdated = (taskId: string, tokenUsage: TokenUsage, toolUsage: ToolUsage) => {
 			this._context = { ...this._context, tokenUsage, toolUsage }
-			this._notifyListeners()
-			for (const listener of this._tokenUsageListeners) {
-				try {
-					listener(taskId, tokenUsage, toolUsage)
-				} catch {
-					// Isolate plugin errors.
-				}
-			}
+			this._broadcastContext()
+			this._pluginServer.broadcastTokenUsageUpdated(taskId, toAgentTokenUsage(tokenUsage))
 		}
 
 		// ToolFailed fires when a tool invocation fails inside the active task.
 		const onToolFailed = (taskId: string, toolName: ToolName, errorMessage: string) => {
-			for (const listener of this._toolFailedListeners) {
-				try {
-					listener(taskId, toolName, errorMessage)
-				} catch {
-					// Isolate plugin errors.
-				}
-			}
+			this._pluginServer.broadcastToolCallFailed(taskId, toolName, errorMessage)
 		}
 
 		// Message fires for every agent message (say/ask) created or updated.
 		const onAgentMessage = (payload: { taskId: string; action: "created" | "updated"; message: ClineMessage }) => {
 			const { taskId, action, message } = payload
-			for (const listener of this._agentMessageListeners) {
-				try {
-					listener(taskId, action, message)
-				} catch {
-					// Isolate plugin errors.
-				}
-			}
+			this._pluginServer.broadcastAgentMessage(taskId, action, toAgentMessage(message))
 		}
 
 		// VS Code workspace change listeners.
@@ -556,7 +174,7 @@ export class RooPluginServiceImpl implements RooPluginService {
 				tokenUsage: this._context.tokenUsage,
 				toolUsage: this._context.toolUsage,
 			})
-			this._notifyListeners()
+			this._broadcastContext()
 		})
 
 		const editorDisposable = vscode.window.onDidChangeVisibleTextEditors(() => {
@@ -564,7 +182,7 @@ export class RooPluginServiceImpl implements RooPluginService {
 				...this._context,
 				openFiles: vscode.window.visibleTextEditors.map((e) => e.document.uri.fsPath).filter(Boolean),
 			}
-			this._notifyListeners()
+			this._broadcastContext()
 		})
 
 		// Wire API events. Cast to access `.on` without fighting the narrow
@@ -597,5 +215,251 @@ export class RooPluginServiceImpl implements RooPluginService {
 			() => workspaceDisposable.dispose(),
 			() => editorDisposable.dispose(),
 		)
+	}
+
+	/**
+	 * Wire PluginServer events → RooCodeAPI method calls.
+	 * Each event corresponds to a PluginClient method; the final `reply` arg
+	 * sends the result (or error) back to the waiting client Promise.
+	 */
+	private _wireServerEvents(): void {
+		const server = this._pluginServer
+
+		/**
+		 * Type-safe wrapper around EventEmitter.on that preserves PluginServerEvents
+		 * tuple types as callback parameters — needed because TypeScript's bundler
+		 * module-resolution sometimes loses the generic inference for external packages.
+		 */
+		const handle = <K extends keyof PluginServerEvents>(
+			event: K,
+			listener: (...args: PluginServerEvents[K]) => void | Promise<void>,
+		): void => {
+			server.on(event as never, listener as never)
+		}
+
+		// ── Connection lifecycle ──────────────────────────────────────────────
+
+		handle("connect", (clientId) => {
+			this._clientTools.set(clientId, [])
+			this._clientMcpServers.set(clientId, [])
+		})
+
+		handle("disconnect", (clientId) => {
+			// Unregister all tools the disconnected client had registered.
+			for (const toolName of this._clientTools.get(clientId) ?? []) {
+				customToolRegistry.unregister(toolName)
+			}
+			this._clientTools.delete(clientId)
+
+			// Unregister all MCP servers the disconnected client had registered.
+			const hub = this._getMcpHub()
+			for (const serverName of this._clientMcpServers.get(clientId) ?? []) {
+				hub?.unregisterPluginServer(serverName).catch((err: unknown) => {
+					console.error(`[RooPluginService] Failed to unregister MCP server "${serverName}":`, err)
+				})
+			}
+			this._clientMcpServers.delete(clientId)
+		})
+
+		// ── Context ───────────────────────────────────────────────────────────
+
+		handle("getContext", (_clientId, reply) => {
+			reply(toAgentContext({ ...this._context }))
+		})
+
+		// ── Profile management ────────────────────────────────────────────────
+
+		handle("getProfiles", (_clientId, reply) => {
+			reply(this.api.getProfiles())
+		})
+
+		handle("getProfile", (_clientId, name, reply) => {
+			const entry = this.api.getProfileEntry(name)
+			reply(entry ? { id: entry.id, name: entry.name, settings: entry as Record<string, unknown> } : undefined)
+		})
+
+		handle("getActiveProfile", (_clientId, reply) => {
+			reply(this.api.getActiveProfile())
+		})
+
+		handle("getCurrentSettings", (_clientId, reply) => {
+			reply(this.api.getConfiguration() as Record<string, unknown>)
+		})
+
+		handle("upsertProfile", async (_clientId, name, settings, activate, reply) => {
+			try {
+				const id = await this.api.upsertProfile(
+					name,
+					settings as Parameters<RooCodeAPI["upsertProfile"]>[1],
+					activate ?? true,
+				)
+				reply(id)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		handle("createProfile", async (_clientId, name, settings, activate, reply) => {
+			try {
+				const id = await this.api.createProfile(
+					name,
+					(settings ?? {}) as Parameters<RooCodeAPI["createProfile"]>[1],
+					activate ?? true,
+				)
+				reply(id)
+			} catch (err: unknown) {
+				reply("", err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		handle("updateProfile", async (_clientId, name, settings, activate, reply) => {
+			try {
+				const id = await this.api.updateProfile(
+					name,
+					settings as Parameters<RooCodeAPI["updateProfile"]>[1],
+					activate ?? true,
+				)
+				reply(id)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		handle("deleteProfile", async (_clientId, name, reply) => {
+			try {
+				await this.api.deleteProfile(name)
+				reply(undefined)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		handle("setActiveProfile", async (_clientId, name, reply) => {
+			try {
+				await this.api.setActiveProfile(name)
+				reply(undefined)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		// ── Task management ───────────────────────────────────────────────────
+
+		handle("startTask", async (_clientId, text, images, reply) => {
+			try {
+				const taskId = await this.api.startNewTask({ text, images })
+				reply(taskId)
+			} catch (err: unknown) {
+				reply("", err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		handle("resumeTask", async (_clientId, taskId, reply) => {
+			try {
+				await this.api.resumeTask(taskId)
+				reply(undefined)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		handle("setCurrentTask", async (_clientId, taskId, reply) => {
+			try {
+				await this.api.resumeTask(taskId)
+				reply(undefined)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		handle("cancelCurrentTask", async (_clientId, reply) => {
+			try {
+				await this.api.cancelCurrentTask()
+				reply(undefined)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		// ── Messaging ─────────────────────────────────────────────────────────
+
+		handle("sendMessage", async (_clientId, text, images, reply) => {
+			try {
+				await this.api.sendMessage(text, images)
+				reply(undefined)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		handle("interruptAgent", async (_clientId, reply) => {
+			try {
+				await this.api.pressSecondaryButton()
+				reply(undefined)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		// ── Tool registration ─────────────────────────────────────────────────
+
+		handle("registerTool", (clientId, definition, reply) => {
+			const namespacedName = `ws-plugin:${clientId}/${definition.name}`
+			const customDef: CustomToolDefinition = {
+				name: namespacedName,
+				description: definition.description,
+				// Execute runs on the remote client via WebSocket round-trip.
+				execute: async (args, ctx) =>
+					server.invokeClientTool(clientId, definition.name, args, {
+						taskId: ctx.task.taskId,
+						mode: ctx.mode,
+					}),
+			}
+			customToolRegistry.register(customDef, `ws-plugin:${clientId}`)
+			const tools = this._clientTools.get(clientId) ?? []
+			tools.push(namespacedName)
+			this._clientTools.set(clientId, tools)
+			reply(undefined)
+		})
+
+		handle("unregisterTool", (clientId, name, reply) => {
+			const namespacedName = `ws-plugin:${clientId}/${name}`
+			customToolRegistry.unregister(namespacedName)
+			const tools = this._clientTools.get(clientId) ?? []
+			const idx = tools.indexOf(namespacedName)
+			if (idx !== -1) tools.splice(idx, 1)
+			reply(undefined)
+		})
+
+		// ── MCP server registration ───────────────────────────────────────────
+
+		handle("registerMcpServer", async (clientId, name, config, reply) => {
+			const hub = this._getMcpHub()
+			if (!hub) {
+				reply(undefined, "McpHub is not available yet. Try again after activation.")
+				return
+			}
+			try {
+				await hub.registerPluginServer(name, `ws-plugin:${clientId}`, config)
+				const servers = this._clientMcpServers.get(clientId) ?? []
+				servers.push(name)
+				this._clientMcpServers.set(clientId, servers)
+				reply(undefined)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
+
+		handle("unregisterMcpServer", async (clientId, name, reply) => {
+			try {
+				await this._getMcpHub()?.unregisterPluginServer(name)
+				const servers = this._clientMcpServers.get(clientId) ?? []
+				const idx = servers.indexOf(name)
+				if (idx !== -1) servers.splice(idx, 1)
+				reply(undefined)
+			} catch (err: unknown) {
+				reply(undefined, err instanceof Error ? err.message : String(err))
+			}
+		})
 	}
 }

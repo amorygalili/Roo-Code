@@ -57,14 +57,12 @@ export type { PluginServerOptions, PluginServerEvents, ReplyFn } from "./plugin-
 export { PluginClient } from "./plugin-client.js"
 export type { PluginClientOptions } from "./plugin-client.js"
 
-export type {
-	C2SMessage,
-	S2CMessage,
-	WireToolDefinition,
-	WireToolContext,
-	AgentMessage,
-	AgentProfile,
-	AgentTaskContext,
-	AgentTokenUsage,
-	AgentMcpServerConfig,
-} from "./protocol.js"
+export type { C2SMessage, S2CMessage, WireToolDefinition, WireToolContext } from "./protocol.js"
+
+// Re-export agent-agnostic types so that consumers only need to import from @roo-code/plugin-api-v2.
+export type { JsonSchema, AgentToolContext, AgentToolDefinition } from "./tool.js"
+export type { AgentProfile, AgentProfileManager } from "./profile.js"
+export type { AgentMessage, AgentSayKind, AgentAskKind } from "./message.js"
+export type { AgentTokenUsage } from "./token-usage.js"
+export type { AgentMcpServerConfig } from "./mcp.js"
+export type { AgentTaskContext } from "./task.js"
