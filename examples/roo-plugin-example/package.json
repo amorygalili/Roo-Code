@@ -4,7 +4,6 @@
 	"description": "Demonstrates the Roo Code plugin API: tool registration, context subscription, and agent messaging.",
 	"version": "0.0.1",
 	"publisher": "example",
-	"type": "module",
 	"engines": {
 		"vscode": "^1.95.0"
 	},
@@ -12,7 +11,7 @@
 		"Other"
 	],
 	"activationEvents": [
-		"onCommand:roo-cline.activationCompleted"
+		"onStartupFinished"
 	],
 	"extensionDependencies": [
 		"RooVeterinaryInc.roo-cline"

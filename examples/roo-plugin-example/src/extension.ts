@@ -165,30 +165,45 @@ function toWebviewTokenUsage(usage: AgentTokenUsage) {
 // ── Activate ──────────────────────────────────────────────────────────────────
 
 export async function activate(context: vscode.ExtensionContext) {
+	// ── Output channel — created first so every subsequent step can log to it ──
+	const out = vscode.window.createOutputChannel("Roo Plugin Example")
+	context.subscriptions.push(out)
+	out.show(true)
+	out.appendLine("[activate] Starting activation…")
+
 	// ── 1. Obtain the Roo Code API ────────────────────────────────────────────
+	out.appendLine("[activate] Looking up RooVeterinaryInc.roo-cline extension…")
 	const rooExt = vscode.extensions.getExtension<RooCodeAPI>("RooVeterinaryInc.roo-cline")
 
 	if (!rooExt) {
+		out.appendLine("[activate] ERROR: Roo Code extension not found — aborting.")
 		vscode.window.showWarningMessage("Roo Plugin Example: Roo Code extension not found.")
 		return
 	}
 
+	out.appendLine(`[activate] Found Roo Code extension (active=${rooExt.isActive})`)
+
 	// Roo Code is declared as a dependency, so it will already be active.
 	const roo = rooExt.exports
 	const port = roo.plugins.pluginServerPort
+	out.appendLine(`[activate] Plugin server port: ${port}`)
 
 	// ── 2. Connect to the PluginServer via WebSocket ──────────────────────────
+	out.appendLine(`[activate] Connecting to ws://localhost:${port} …`)
 	const client = new PluginClient({ url: `ws://localhost:${port}` })
 	context.subscriptions.push({ dispose: () => client.disconnect() })
 
 	try {
 		await client.connect()
+		out.appendLine("[activate] WebSocket connected ✓")
 	} catch (err: unknown) {
+		out.appendLine(`[activate] ERROR: WebSocket connection failed — ${err}`)
 		vscode.window.showErrorMessage(`Roo Plugin Example: Could not connect to plugin server on port ${port}: ${err}`)
 		return
 	}
 
 	// ── 3. Create / refresh the demo configuration profile ───────────────────
+	out.appendLine("[activate] Upserting demo profile…")
 	const DEMO_PROFILE_NAME = "Roo Plugin Demo"
 	const DEMO_PROFILE_SETTINGS = {
 		apiProvider: "openai",
@@ -196,10 +211,11 @@ export async function activate(context: vscode.ExtensionContext) {
 		openAiModelId: "gpt-4o-mini",
 	}
 	client.upsertProfile(DEMO_PROFILE_NAME, DEMO_PROFILE_SETTINGS, false).catch((err: unknown) => {
-		console.error("[roo-plugin-example] Failed to upsert demo profile:", err)
+		out.appendLine(`[activate] WARNING: Failed to upsert demo profile — ${err}`)
 	})
 
 	// ── 4. Register custom tools ──────────────────────────────────────────────
+	out.appendLine("[activate] Registering tools…")
 
 	// Tool A: count words in a string.
 	const unregisterWordCount = client.registerTool({
@@ -221,23 +237,23 @@ export async function activate(context: vscode.ExtensionContext) {
 		execute: async () => new Date().toISOString(),
 	})
 	context.subscriptions.push({ dispose: unregisterGetDatetime })
-
-	// ── 5. Output channel (logs extension-host activity) ─────────────────────
-	const outputChannel = vscode.window.createOutputChannel("Roo Plugin Example")
-	context.subscriptions.push(outputChannel)
+	out.appendLine("[activate] Tools registered ✓")
 
 	// ── 6. Register the sidebar panel ─────────────────────────────────────────
+	out.appendLine("[activate] Registering sidebar panel…")
 	const panel = new RooPluginPanelProvider(context.extensionUri, client, DEMO_PROFILE_NAME, DEMO_PROFILE_SETTINGS)
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(RooPluginPanelProvider.VIEW_ID, panel, {
 			webviewOptions: { retainContextWhenHidden: true },
 		}),
 	)
+	out.appendLine("[activate] Sidebar panel registered ✓")
 
 	// ── 7. Register a plugin MCP server ──────────────────────────────────────
 	// Requires `uvx` (part of the `uv` Python toolchain). Install with:
 	//   curl -LsSf https://astral.sh/uv/install.sh | sh   (macOS / Linux)
 	//   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  (Windows)
+	out.appendLine("[activate] Registering MCP server (plugin-time-server)…")
 	client
 		.registerMcpServer("plugin-time-server", {
 			type: "stdio",
@@ -246,16 +262,17 @@ export async function activate(context: vscode.ExtensionContext) {
 		})
 		.then((cleanupMcpServer) => {
 			context.subscriptions.push({ dispose: cleanupMcpServer })
-			outputChannel.appendLine("[mcp] Registered 'plugin-time-server' (mcp-server-time via uvx)")
+			out.appendLine("[mcp] Registered 'plugin-time-server' (mcp-server-time via uvx) ✓")
 		})
 		.catch((err: unknown) => {
-			outputChannel.appendLine(`[mcp] Failed to register 'plugin-time-server': ${err}`)
+			out.appendLine(`[mcp] WARNING: Failed to register 'plugin-time-server' — ${err}`)
 			vscode.window.showWarningMessage(
 				"Roo Plugin Example: Could not register MCP server — ensure 'uvx' is installed.",
 			)
 		})
 
 	// ── 8. Status bar ─────────────────────────────────────────────────────────
+	out.appendLine("[activate] Creating status bar item…")
 	const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
 	statusBar.tooltip = "Roo Code agent context — open the Roo Plugin Demo panel for details"
 	context.subscriptions.push(statusBar)
@@ -277,9 +294,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// ── 10. Token usage → output channel + panel ───────────────────────────────
 	const unsubscribeTokens = client.onTokenUsageUpdated((taskId, usage) => {
 		const { tokensIn, tokensOut, cost } = usage
-		outputChannel.appendLine(
-			`[tokens] task=${taskId.slice(0, 8)} in=${tokensIn} out=${tokensOut} cost=$${cost.toFixed(4)}`,
-		)
+		out.appendLine(`[tokens] task=${taskId.slice(0, 8)} in=${tokensIn} out=${tokensOut} cost=$${cost.toFixed(4)}`)
 		const ctx = client.getContext()
 		const task = ctx.taskId ? `task:${ctx.taskId.slice(0, 8)}` : "idle"
 		statusBar.text = `$(robot) Roo [${ctx.mode}] ${task} · $${cost.toFixed(4)}`
@@ -289,7 +304,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// ── 11. Tool failures → notification + output channel + panel ─────────────
 	const unsubscribeToolFailed = client.onToolCallFailed((taskId, toolName, errorMessage) => {
-		outputChannel.appendLine(`[tool-failed] task=${taskId.slice(0, 8)} tool=${toolName}: ${errorMessage}`)
+		out.appendLine(`[tool-failed] task=${taskId.slice(0, 8)} tool=${toolName}: ${errorMessage}`)
 		vscode.window.showWarningMessage(`Roo: Tool "${toolName}" failed — ${errorMessage}`)
 		panel.postMessage({ type: "toolFailed", taskId, toolName, errorMessage })
 	})
@@ -298,7 +313,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// ── 12. Agent messages → output channel + panel ────────────────────────────
 	const unsubscribeAgentMsg = client.onAgentMessage((taskId, action, message) => {
 		if (message.type === "say" && message.say === "text" && !message.partial && message.text) {
-			outputChannel.appendLine(`[agent] [${taskId.slice(0, 8)}] [${action}] ${message.text.slice(0, 120)}`)
+			out.appendLine(`[agent] [${taskId.slice(0, 8)}] [${action}] ${message.text.slice(0, 120)}`)
 		}
 		panel.postMessage({ type: "agentMessage", taskId, action, message })
 	})
@@ -310,8 +325,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand("roo-plugin-example.pingPanel", async () => {
 			panel.postMessage({ type: "pingFromExtension", ts: Date.now() })
-			outputChannel.appendLine("[ext → panel] sent ping")
-			outputChannel.show(true)
+			out.appendLine("[ext → panel] sent ping")
+			out.show(true)
 		}),
 	)
 
@@ -337,7 +352,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	)
 
-	outputChannel.appendLine(`[roo-plugin-example] Connected to Roo Code plugin server on port ${port}`)
+	out.appendLine("[activate] Activation complete ✓")
 	vscode.window.showInformationMessage(
 		`Roo Plugin Example activated — open the 'Roo Plugin Demo' panel in the Roo sidebar.`,
 	)
