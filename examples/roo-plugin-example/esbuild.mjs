@@ -1,7 +1,7 @@
 /**
  * esbuild build script for roo-plugin-example.
  *
- * Using esbuild instead of plain tsc lets us bundle @roo-code/plugin-api-v2
+ * Using esbuild instead of plain tsc lets us bundle @roo-code/plugin-api
  * (and its dependency `ws`) directly into out/extension.js, so the VS Code
  * extension host can load them without any extra install steps.
  *
@@ -20,7 +20,7 @@ const ctx = await esbuild.context({
 	outfile: "out/extension.js",
 	/**
 	 * `vscode` is provided by the VS Code runtime and must NOT be bundled.
-	 * Everything else (including ws and @roo-code/plugin-api-v2) is inlined.
+	 * Everything else (including ws and @roo-code/plugin-api) is inlined.
 	 */
 	external: ["vscode"],
 	format: "cjs", // VS Code extensions use CommonJS

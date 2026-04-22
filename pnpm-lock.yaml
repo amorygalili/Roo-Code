@@ -464,9 +464,9 @@ importers:
 
   examples/roo-plugin-example:
     dependencies:
-      '@roo-code/plugin-api-v2':
+      '@roo-code/plugin-api':
         specifier: workspace:^
-        version: link:../../packages/plugin-api-v2
+        version: link:../../packages/plugin-api
     devDependencies:
       '@roo-code/types':
         specifier: workspace:^
@@ -791,18 +791,6 @@ importers:
         version: 3.2.4(@types/debug@4.1.12)(@types/node@20.17.57)(@vitest/ui@3.2.4)(jiti@2.4.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.19.4)(yaml@2.8.0)
 
   packages/plugin-api:
-    devDependencies:
-      '@roo-code/config-eslint':
-        specifier: workspace:^
-        version: link:../config-eslint
-      '@roo-code/config-typescript':
-        specifier: workspace:^
-        version: link:../config-typescript
-      '@types/node':
-        specifier: ^24.1.0
-        version: 24.2.1
-
-  packages/plugin-api-v2:
     dependencies:
       ws:
         specifier: ^8.18.2
@@ -851,9 +839,9 @@ importers:
 
   packages/types:
     dependencies:
-      '@roo-code/plugin-api-v2':
+      '@roo-code/plugin-api':
         specifier: workspace:^
-        version: link:../plugin-api-v2
+        version: link:../plugin-api
       zod:
         specifier: 3.25.76
         version: 3.25.76
@@ -957,9 +945,6 @@ importers:
       '@roo-code/plugin-api':
         specifier: workspace:^
         version: link:../packages/plugin-api
-      '@roo-code/plugin-api-v2':
-        specifier: workspace:^
-        version: link:../packages/plugin-api-v2
       '@roo-code/telemetry':
         specifier: workspace:^
         version: link:../packages/telemetry
@@ -16730,7 +16715,7 @@ snapshots:
       sirv: 3.0.1
       tinyglobby: 0.2.14
       tinyrainbow: 2.0.0
-      vitest: 3.2.4(@types/debug@4.1.12)(@types/node@20.17.57)(@vitest/ui@3.2.4)(jiti@2.4.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.19.4)(yaml@2.8.0)
+      vitest: 3.2.4(@types/debug@4.1.12)(@types/node@24.12.2)(@vitest/ui@3.2.4)(jiti@2.4.2)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.19.4)(yaml@2.8.0)
 
   '@vitest/utils@3.2.4':
     dependencies:

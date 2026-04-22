@@ -14,7 +14,7 @@ export type {
 	JsonSchema,
 	AgentProfile,
 	AgentProfileManager,
-} from "@roo-code/plugin-api-v2"
+} from "@roo-code/plugin-api"
 
 /**
  * A snapshot of the agent's current runtime context, broadcast to WebSocket plugin
@@ -43,7 +43,7 @@ export interface RooTaskContext {
 
 /**
  * The plugin service exposed on the Roo Code API.
- * Plugins connect via WebSocket using `PluginClient` from `@roo-code/plugin-api-v2`.
+ * Plugins connect via WebSocket using `PluginClient` from `@roo-code/plugin-api`.
  */
 export interface RooPluginService {
 	/**

@@ -1,5 +1,5 @@
 /**
- * @roo-code/plugin-api-v2
+ * @roo-code/plugin-api
  *
  * WebSocket-based plugin server/client for code assistant integrations.
  *
@@ -13,7 +13,7 @@
  * ─── Quick start (server / agent side) ────────────────────────────────────
  *
  * ```ts
- * import { PluginServer } from "@roo-code/plugin-api-v2"
+ * import { PluginServer } from "@roo-code/plugin-api"
  *
  * const server = new PluginServer({ port: 7777 })
  * server.listen()
@@ -32,7 +32,7 @@
  * ─── Quick start (client / plugin side) ───────────────────────────────────
  *
  * ```ts
- * import { PluginClient } from "@roo-code/plugin-api-v2"
+ * import { PluginClient } from "@roo-code/plugin-api"
  *
  * const client = new PluginClient({ url: "ws://localhost:7777" })
  * await client.connect()
@@ -59,7 +59,7 @@ export type { PluginClientOptions } from "./plugin-client.js"
 
 export type { C2SMessage, S2CMessage, WireToolDefinition, WireToolContext } from "./protocol.js"
 
-// Re-export agent-agnostic types so that consumers only need to import from @roo-code/plugin-api-v2.
+// Re-export agent-agnostic types so that consumers only need to import from @roo-code/plugin-api.
 export type { JsonSchema, AgentToolContext, AgentToolDefinition } from "./tool.js"
 export type { AgentProfile, AgentProfileManager } from "./profile.js"
 export type { AgentMessage, AgentSayKind, AgentAskKind } from "./message.js"

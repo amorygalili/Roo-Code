@@ -1,9 +1,9 @@
 import * as vscode from "vscode"
 
 import { customToolRegistry } from "@roo-code/core"
-import type { AgentTaskContext, AgentTokenUsage, AgentMessage } from "@roo-code/plugin-api-v2"
-import { PluginServer } from "@roo-code/plugin-api-v2"
-import type { PluginServerEvents } from "@roo-code/plugin-api-v2"
+import type { AgentTaskContext, AgentTokenUsage, AgentMessage } from "@roo-code/plugin-api"
+import { PluginServer } from "@roo-code/plugin-api"
+import type { PluginServerEvents } from "@roo-code/plugin-api"
 import type {
 	RooPluginService,
 	RooTaskContext,

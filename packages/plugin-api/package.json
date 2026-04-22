@@ -1,5 +1,5 @@
 {
-	"name": "@roo-code/plugin-api-v2",
+	"name": "@roo-code/plugin-api",
 	"description": "WebSocket-based plugin server/client for code assistant integrations.",
 	"version": "0.0.0",
 	"type": "module",

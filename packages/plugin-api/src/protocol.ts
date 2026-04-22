@@ -1,5 +1,5 @@
 /**
- * @roo-code/plugin-api-v2 — WebSocket protocol types
+ * @roo-code/plugin-api — WebSocket protocol types
  *
  * These types define the JSON messages that flow over the WebSocket connection
  * between a PluginClient and a PluginServer.

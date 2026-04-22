@@ -1,7 +1,7 @@
 /**
  * Roo Plugin Example — WebSocket edition
  *
- * Demonstrates the socket-based plugin API (@roo-code/plugin-api-v2):
+ * Demonstrates the socket-based plugin API (@roo-code/plugin-api):
  *   1. Tool registration        – adds `word_count` and `get_datetime` tools the agent can call
  *   2. Context subscription     – live mode / task info shown in the panel and status bar
  *   3. Token usage tracking     – cumulative token counts and cost displayed in the panel
@@ -13,7 +13,7 @@
  *   9. MCP server registration  – registers `mcp-server-time` via the plugin API
  *
  * Instead of the in-process `roo.plugins.register()` API, this example uses a
- * `PluginClient` from `@roo-code/plugin-api-v2` that connects over WebSocket to the
+ * `PluginClient` from `@roo-code/plugin-api` that connects over WebSocket to the
  * `PluginServer` started inside Roo Code. The port is exposed via `roo.plugins.pluginServerPort`.
  * The webview panel is driven entirely by extension-host→panel `postMessage` calls,
  * which replaces the old `handle.postMessageToPanel` approach.
@@ -21,7 +21,7 @@
 
 import * as vscode from "vscode"
 
-import { PluginClient } from "@roo-code/plugin-api-v2"
+import { PluginClient } from "@roo-code/plugin-api"
 import type { AgentTaskContext, AgentTokenUsage, RooCodeAPI } from "@roo-code/types"
 
 // ── Panel provider ────────────────────────────────────────────────────────────
