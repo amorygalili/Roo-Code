@@ -1,6 +1,6 @@
 {
-	"name": "@roo-code/plugin-api",
-	"description": "Agent-agnostic plugin interfaces for code assistant integrations.",
+	"name": "@roo-code/plugin-api-v2",
+	"description": "WebSocket-based plugin server/client for code assistant integrations.",
 	"version": "0.0.0",
 	"type": "module",
 	"exports": "./src/index.ts",
@@ -9,9 +9,13 @@
 		"check-types": "tsc --noEmit",
 		"clean": "rimraf .turbo"
 	},
+	"dependencies": {
+		"ws": "^8.18.2"
+	},
 	"devDependencies": {
 		"@roo-code/config-eslint": "workspace:^",
 		"@roo-code/config-typescript": "workspace:^",
-		"@types/node": "^24.1.0"
+		"@types/node": "^24.1.0",
+		"@types/ws": "^8.5.14"
 	}
 }

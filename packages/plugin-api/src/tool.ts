@@ -31,25 +31,6 @@ export interface AgentToolContext {
  * The agent surfaces the tool's name and description to the LLM so it can
  * decide when to call it. When called, the agent invokes `execute` with the
  * arguments parsed from the LLM's request and the current `AgentToolContext`.
- *
- * @example
- * ```ts
- * const myTool: AgentToolDefinition = {
- *   name: "get_weather",
- *   description: "Fetch the current weather for a given city.",
- *   parameters: {
- *     type: "object",
- *     properties: {
- *       city: { type: "string", description: "City name" },
- *     },
- *     required: ["city"],
- *   },
- *   execute: async ({ city }) => {
- *     const data = await fetchWeather(city)
- *     return `Weather in ${city}: ${data.description}, ${data.temp}°C`
- *   },
- * }
- * ```
  */
 export interface AgentToolDefinition {
 	/**

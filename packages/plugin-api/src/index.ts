@@ -1,49 +1,68 @@
 /**
- * @roo-code/plugin-api
+ * @roo-code/plugin-api-v2
  *
- * Agent-agnostic TypeScript interfaces for building code assistant plugins.
+ * WebSocket-based plugin server/client for code assistant integrations.
  *
- * This package defines the contract that any code assistant (agent) must
- * implement to support third-party plugins. Plugin code written against
- * these interfaces is portable across different agent implementations.
+ * Agents (e.g. Roo Code) create a {@link PluginServer} that listens on a TCP
+ * port and reacts to plugin commands via typed EventEmitter events.
  *
- * ─── Quick start ─────────────────────────────────────────────────────────────
+ * Plugins (in any language/editor that speaks WebSocket) create a
+ * {@link PluginClient} that connects to the server and calls methods that
+ * mirror the in-process {@link AgentPluginHandle} API from `@roo-code/plugin-api`.
  *
- * 1. Obtain the agent's plugin service (agent-specific; see its docs).
- * 2. Call `register()` with your plugin manifest to get a handle.
- * 3. Use the handle to register tools, MCP servers, listen for messages, etc.
- * 4. Call `handle.dispose()` (or push it to VS Code's `context.subscriptions`)
- *    when your extension deactivates.
+ * ─── Quick start (server / agent side) ────────────────────────────────────
  *
- * @example
  * ```ts
- * import type { AgentPluginService, AgentPluginManifest } from "@roo-code/plugin-api"
+ * import { PluginServer } from "@roo-code/plugin-api-v2"
  *
- * function activate(pluginService: AgentPluginService) {
- *   const handle = pluginService.register({
- *     id: "my-publisher.my-plugin",
- *     displayName: "My Plugin",
- *   })
+ * const server = new PluginServer({ port: 7777 })
+ * server.listen()
  *
- *   handle.registerTool({
- *     name: "hello",
- *     description: "Say hello.",
- *     execute: async () => "Hello from my plugin!",
- *   })
+ * server.on("upsertProfile", (clientId, name, settings, activate, reply) => {
+ *   const id = myProfileManager.upsert(name, settings, activate)
+ *   reply(id)
+ * })
  *
- *   handle.onAgentMessage((taskId, action, message) => {
- *     console.log(`[${taskId}] ${action}:`, message.text)
- *   })
+ * server.on("startTask", (clientId, text, images, reply) => {
+ *   const taskId = myTaskManager.start(text, images)
+ *   reply(taskId)
+ * })
+ * ```
  *
- *   return handle // dispose() cleans everything up
- * }
+ * ─── Quick start (client / plugin side) ───────────────────────────────────
+ *
+ * ```ts
+ * import { PluginClient } from "@roo-code/plugin-api-v2"
+ *
+ * const client = new PluginClient({ url: "ws://localhost:7777" })
+ * await client.connect()
+ *
+ * const profileId = await client.upsertProfile("my-profile", { apiProvider: "anthropic" }, true)
+ *
+ * client.registerTool({
+ *   name: "hello",
+ *   description: "Say hello",
+ *   execute: async () => "Hello from my plugin!",
+ * })
+ *
+ * client.onAgentMessage((taskId, action, message) => {
+ *   console.log(`[${taskId}] ${action}:`, message.text)
+ * })
  * ```
  */
 
+export { PluginServer } from "./plugin-server.js"
+export type { PluginServerOptions, PluginServerEvents, ReplyFn } from "./plugin-server.js"
+
+export { PluginClient } from "./plugin-client.js"
+export type { PluginClientOptions } from "./plugin-client.js"
+
+export type { C2SMessage, S2CMessage, WireToolDefinition, WireToolContext } from "./protocol.js"
+
+// Re-export agent-agnostic types so that consumers only need to import from @roo-code/plugin-api-v2.
+export type { JsonSchema, AgentToolContext, AgentToolDefinition } from "./tool.js"
+export type { AgentProfile, AgentProfileManager } from "./profile.js"
 export type { AgentMessage, AgentSayKind, AgentAskKind } from "./message.js"
 export type { AgentTokenUsage } from "./token-usage.js"
 export type { AgentMcpServerConfig } from "./mcp.js"
-export type { JsonSchema, AgentToolContext, AgentToolDefinition } from "./tool.js"
-export type { AgentProfile, AgentProfileManager } from "./profile.js"
 export type { AgentTaskContext } from "./task.js"
-export type { AgentPluginManifest, AgentPluginHandle, AgentPluginService } from "./plugin.js"
