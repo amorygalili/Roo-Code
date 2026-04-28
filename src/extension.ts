@@ -419,6 +419,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	const api = new API(outputChannel, provider, socketPath, enableLogging)
 
+	// Bind the WebSocket plugin server and wait for the actual port to be
+	// assigned before returning, so that `api.plugins.pluginServerPort` is
+	// accurate by the time any dependent extension reads it.
+	await api.listen()
+
 	return api
 }
 

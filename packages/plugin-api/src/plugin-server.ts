@@ -101,8 +101,11 @@ export interface PluginServerEvents {
 // ---------------------------------------------------------------------------
 
 export interface PluginServerOptions {
-	/** TCP port the WebSocket server will bind to. */
-	port: number
+	/**
+	 * TCP port the WebSocket server will bind to.
+	 * Omit (or pass `0`) to let the OS assign a free port automatically.
+	 */
+	port?: number
 	/** Optional host/interface to bind to (default: all interfaces). */
 	host?: string
 	/** Optional logger function (default: console.log). */
@@ -117,6 +120,8 @@ export class PluginServer extends EventEmitter<PluginServerEvents> {
 	private readonly _pendingToolCalls: Map<string, { resolve: (r: string) => void; reject: (e: Error) => void }> =
 		new Map()
 	private _wss: WebSocketServer | null = null
+	/** The actual port the server bound to (may differ from options.port if a fallback was used). */
+	private _boundPort?: number
 
 	constructor(options: PluginServerOptions) {
 		super()
@@ -126,12 +131,36 @@ export class PluginServer extends EventEmitter<PluginServerEvents> {
 
 	// ── Lifecycle ────────────────────────────────────────────────────────────
 
-	/** Start listening for incoming plugin client connections. */
-	public listen(): void {
-		this._wss = new WebSocketServer({ port: this._options.port, host: this._options.host })
-		this._wss.on("connection", (ws) => this._onConnection(ws))
-		this._wss.on("error", (err) => this._log("[PluginServer] wss error:", err))
-		this._log(`[PluginServer] Listening on port ${this._options.port}`)
+	/**
+	 * Start listening for incoming plugin client connections.
+	 *
+	 * Binds to `options.port` when provided, otherwise passes `0` so the OS
+	 * assigns a free port automatically.  The actual bound port is available
+	 * via the `port` getter once the returned Promise resolves.
+	 */
+	public listen(): Promise<void> {
+		return new Promise((resolve, reject) => {
+			const wss = new WebSocketServer({ port: this._options.port ?? 0, host: this._options.host })
+
+			const onListening = () => {
+				wss.off("error", onError)
+				this._wss = wss
+				const addr = wss.address()
+				this._boundPort = typeof addr === "object" && addr !== null ? addr.port : (this._options.port ?? 0)
+				this._log(`[PluginServer] Listening on port ${this._boundPort}`)
+				wss.on("connection", (ws) => this._onConnection(ws))
+				wss.on("error", (err) => this._log("[PluginServer] wss error:", err))
+				resolve()
+			}
+
+			const onError = (err: Error) => {
+				wss.off("listening", onListening)
+				reject(err)
+			}
+
+			wss.once("listening", onListening)
+			wss.once("error", onError)
+		})
 	}
 
 	/** Close the server and disconnect all clients. */
@@ -368,7 +397,8 @@ export class PluginServer extends EventEmitter<PluginServerEvents> {
 		return [...this._clients.keys()]
 	}
 
+	/** The actual TCP port the server is listening on. */
 	public get port(): number {
-		return this._options.port
+		return this._boundPort ?? this._options.port ?? 0
 	}
 }

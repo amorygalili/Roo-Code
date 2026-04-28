@@ -41,6 +41,16 @@ export class API extends EventEmitter<RooCodeEvents> implements RooCodeAPI {
 
 	public readonly plugins: RooPluginService
 
+	/**
+	 * Start background services that require async binding (e.g. the WebSocket
+	 * plugin server).  Must be awaited once after construction so that
+	 * `plugins.pluginServerPort` reflects the real bound port before any
+	 * dependent extension reads it.
+	 */
+	async listen(): Promise<void> {
+		await (this.plugins as RooPluginServiceImpl).listen()
+	}
+
 	constructor(
 		outputChannel: vscode.OutputChannel,
 		provider: ClineProvider,

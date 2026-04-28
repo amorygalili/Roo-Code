@@ -73,9 +73,6 @@ function toAgentMessage(msg: ClineMessage): AgentMessage {
 // RooPluginServiceImpl
 // ---------------------------------------------------------------------------
 
-/** Default port for the WebSocket plugin server. */
-const DEFAULT_PLUGIN_SERVER_PORT = 6066
-
 export class RooPluginServiceImpl implements RooPluginService {
 	public readonly api: RooCodeAPI
 	private readonly _getMcpHub: () => McpHub | undefined
@@ -92,10 +89,18 @@ export class RooPluginServiceImpl implements RooPluginService {
 	constructor(api: RooCodeAPI, getMcpHub: () => McpHub | undefined = () => undefined) {
 		this.api = api
 		this._getMcpHub = getMcpHub
-		this._pluginServer = new PluginServer({ port: DEFAULT_PLUGIN_SERVER_PORT })
+		this._pluginServer = new PluginServer({})
 		this._wireEvents()
 		this._wireServerEvents()
-		this._pluginServer.listen()
+	}
+
+	/**
+	 * Start the WebSocket plugin server.  Resolves once the server is bound and
+	 * the actual port is known.  Call this once after construction and await the
+	 * result before exposing `pluginServerPort` to callers.
+	 */
+	async listen(): Promise<void> {
+		await this._pluginServer.listen()
 	}
 
 	get pluginServerPort(): number {
