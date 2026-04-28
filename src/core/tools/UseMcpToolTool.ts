@@ -347,6 +347,50 @@ export class UseMcpToolTool extends BaseTool<"use_mcp_tool"> {
 
 		await task.say("mcp_server_response", toolResultPretty, images)
 		pushToolResult(formatResponse.toolResult(toolResultPretty, images))
+
+		// MCP Apps (SEP-1865): if the tool has an associated ui:// resource, fetch
+		// the HTML and send it to the webview so it can render an interactive iframe.
+		await this.sendMcpAppHtmlIfAvailable(task, serverName, toolName, executionId, parsedArguments, toolResult)
+	}
+
+	private async sendMcpAppHtmlIfAvailable(
+		task: Task,
+		serverName: string,
+		toolName: string,
+		executionId: string,
+		toolArguments: Record<string, unknown> | undefined,
+		toolResult: any,
+	): Promise<void> {
+		try {
+			const mcpHub = task.providerRef.deref()?.getMcpHub()
+			if (!mcpHub) return
+
+			// Find the tool definition to check for a ui:// resource URI
+			const server = mcpHub.getServers().find((s) => s.name === serverName)
+			const toolDef = server?.tools?.find((t) => t.name === toolName)
+			if (!toolDef?.uiResourceUri) return
+
+			// Fetch the HTML from the MCP server
+			const resourceResponse = await mcpHub.readResource(serverName, toolDef.uiResourceUri)
+			const htmlContent = resourceResponse?.contents?.[0]?.text
+			if (!htmlContent) return
+
+			const provider = task.providerRef.deref()
+			provider?.postMessageToWebview({
+				type: "mcpAppHtml",
+				values: {
+					executionId,
+					serverName,
+					toolName,
+					html: htmlContent,
+					toolArguments: toolArguments ?? {},
+					toolResult: toolResult ?? null,
+				},
+			})
+		} catch (error) {
+			// Non-fatal: failing to render the MCP App UI doesn't break the tool result
+			console.error("Failed to fetch MCP App HTML for tool", toolName, error)
+		}
 	}
 }
 

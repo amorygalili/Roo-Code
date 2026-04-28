@@ -73,6 +73,8 @@ export type McpTool = {
 	inputSchema?: object
 	alwaysAllow?: boolean
 	enabledForPrompt?: boolean
+	/** URI of a ui:// resource that provides an interactive HTML app for this tool (MCP Apps / SEP-1865) */
+	uiResourceUri?: string
 }
 
 export type McpResource = {

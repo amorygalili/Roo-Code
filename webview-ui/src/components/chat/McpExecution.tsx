@@ -10,6 +10,8 @@ import {
 	mcpExecutionStatusSchema,
 } from "@roo-code/types"
 
+import { McpAppView, type McpAppViewProps } from "./McpAppView"
+
 import { safeJsonParse } from "@roo/core"
 
 import { cn } from "@src/lib/utils"
@@ -54,6 +56,8 @@ export const McpExecution = ({
 	const [status, setStatus] = useState<McpExecutionStatus | null>(null)
 	const [responseText, setResponseText] = useState(text || "")
 	const [argumentsText, setArgumentsText] = useState(text || "")
+	// MCP Apps (SEP-1865): optional interactive iframe UI sent by the extension
+	const [mcpApp, setMcpApp] = useState<McpAppViewProps | null>(null)
 	const [serverName, setServerName] = useState(initialServerName)
 	const [toolName, setToolName] = useState(initialToolName)
 
@@ -130,7 +134,7 @@ export const McpExecution = ({
 		setIsResponseExpanded(!isResponseExpanded)
 	}, [isResponseExpanded])
 
-	// Listen for MCP execution status messages
+	// Listen for MCP execution status messages and MCP App HTML
 	const onMessage = useCallback(
 		(event: MessageEvent) => {
 			const message: ExtensionMessage = event.data
@@ -156,6 +160,12 @@ export const McpExecution = ({
 				} catch (e) {
 					console.error("Failed to parse MCP execution status", e)
 				}
+			}
+
+			// MCP Apps (SEP-1865): render the interactive iframe UI when the
+			// extension sends HTML for this specific tool execution.
+			if (message.type === "mcpAppHtml" && message.values?.executionId === executionId) {
+				setMcpApp(message.values as McpAppViewProps)
 			}
 		},
 		[executionId],
@@ -290,6 +300,18 @@ export const McpExecution = ({
 					isPartial={status ? status.status !== "completed" : false}
 				/>
 			</div>
+
+			{/* MCP Apps (SEP-1865): render the interactive iframe UI when available */}
+			{mcpApp && (
+				<McpAppView
+					executionId={mcpApp.executionId}
+					serverName={mcpApp.serverName}
+					toolName={mcpApp.toolName}
+					html={mcpApp.html}
+					toolArguments={mcpApp.toolArguments}
+					toolResult={mcpApp.toolResult}
+				/>
+			)}
 		</>
 	)
 }

@@ -104,6 +104,9 @@ export interface ExtensionMessage {
 		| "folderSelected"
 		| "skills"
 		| "fileContent"
+		// MCP Apps (SEP-1865) – interactive iframe UI
+		| "mcpAppHtml"
+		| "mcpAppProxyResult"
 	text?: string
 	/** For fileContent: { path, content, error? } */
 	fileContent?: { path: string; content: string | null; error?: string }
@@ -581,6 +584,10 @@ export interface WebviewMessage {
 		| "moveSkill"
 		| "updateSkillModes"
 		| "openSkillFile"
+		// MCP Apps (SEP-1865) – interactive iframe UI
+		| "mcpAppProxyToolCall"
+		| "mcpAppProxyResourceRead"
+		| "mcpAppSendMessage"
 	text?: string
 	taskId?: string
 	editedMessageContent?: string

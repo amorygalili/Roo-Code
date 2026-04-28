@@ -3648,6 +3648,68 @@ export const webviewMessageHandler = async (
 			break
 		}
 
+		// ------------------------------------------------------------------
+		// MCP Apps (SEP-1865) – proxy tool calls and resource reads from the
+		// sandboxed iframe to the appropriate MCP server, then return results
+		// to the webview so the iframe can receive them.
+		// ------------------------------------------------------------------
+
+		case "mcpAppProxyToolCall": {
+			const { requestId, serverName, toolName, toolArguments } = (message.values ?? {}) as {
+				requestId: string
+				serverName: string
+				toolName: string
+				toolArguments?: Record<string, unknown>
+			}
+			try {
+				const result = await provider.getMcpHub()?.callTool(serverName, toolName, toolArguments)
+				provider.postMessageToWebview({
+					type: "mcpAppProxyResult",
+					values: { requestId, result },
+				})
+			} catch (error) {
+				provider.postMessageToWebview({
+					type: "mcpAppProxyResult",
+					values: { requestId, error: error instanceof Error ? error.message : String(error) },
+				})
+			}
+			break
+		}
+
+		case "mcpAppProxyResourceRead": {
+			const { requestId, serverName, uri } = (message.values ?? {}) as {
+				requestId: string
+				serverName: string
+				uri: string
+			}
+			try {
+				const result = await provider.getMcpHub()?.readResource(serverName, uri)
+				provider.postMessageToWebview({
+					type: "mcpAppProxyResult",
+					values: { requestId, result },
+				})
+			} catch (error) {
+				provider.postMessageToWebview({
+					type: "mcpAppProxyResult",
+					values: { requestId, error: error instanceof Error ? error.message : String(error) },
+				})
+			}
+			break
+		}
+
+		case "mcpAppSendMessage": {
+			// The MCP App requested that a message be added to the conversation.
+			// We inject it as a user message response so the agent can pick it up.
+			const text = message.values?.text as string | undefined
+			if (text) {
+				const currentTask = provider.getCurrentTask()
+				if (currentTask) {
+					await currentTask.submitUserMessage(text)
+				}
+			}
+			break
+		}
+
 		default: {
 			// console.log(`Unhandled message type: ${message.type}`)
 			//

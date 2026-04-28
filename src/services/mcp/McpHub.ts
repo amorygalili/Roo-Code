@@ -691,7 +691,14 @@ export class McpHub {
 					version: this.providerRef.deref()?.context.extension?.packageJSON?.version ?? "1.0.0",
 				},
 				{
-					capabilities: {},
+					capabilities: {
+						// Advertise MCP Apps (SEP-1865) support so servers can include ui:// resources
+						extensions: {
+							"io.modelcontextprotocol/ui": {
+								mimeTypes: ["text/html;profile=mcp-app"],
+							},
+						},
+					},
 				},
 			)
 
@@ -1024,11 +1031,21 @@ export class McpHub {
 			const hasWildcard = alwaysAllowConfig.includes("*")
 
 			// Mark tools as always allowed and enabled for prompt based on settings
-			const tools = (response?.tools || []).map((tool) => ({
-				...tool,
-				alwaysAllow: hasWildcard || alwaysAllowConfig.includes(tool.name),
-				enabledForPrompt: !disabledToolsList.includes(tool.name),
-			}))
+			const tools = (response?.tools || []).map((tool) => {
+				// Extract MCP Apps (SEP-1865) ui:// resource URI from tool metadata
+				const uiMeta = tool._meta as Record<string, unknown> | undefined
+				const uiResourceUri =
+					typeof (uiMeta?.ui as Record<string, unknown>)?.resourceUri === "string"
+						? ((uiMeta!.ui as Record<string, unknown>).resourceUri as string)
+						: undefined
+
+				return {
+					...tool,
+					alwaysAllow: hasWildcard || alwaysAllowConfig.includes(tool.name),
+					enabledForPrompt: !disabledToolsList.includes(tool.name),
+					...(uiResourceUri ? { uiResourceUri } : {}),
+				}
+			})
 
 			return tools
 		} catch (error) {
