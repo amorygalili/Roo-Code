@@ -1284,6 +1284,7 @@ export class ClineProvider
 						window.IMAGES_BASE_URI = "${imagesUri}"
 						window.AUDIO_BASE_URI = "${audioUri}"
 						window.MATERIAL_ICONS_BASE_URI = "${materialIconsUri}"
+						window.WEBVIEW_NONCE = "${nonce}"
 					</script>
 					<title>Roo Code</title>
 				</head>
@@ -1363,6 +1364,7 @@ export class ClineProvider
 				window.IMAGES_BASE_URI = "${imagesUri}"
 				window.AUDIO_BASE_URI = "${audioUri}"
 				window.MATERIAL_ICONS_BASE_URI = "${materialIconsUri}"
+				window.WEBVIEW_NONCE = "${nonce}"
 			</script>
             <title>Roo Code</title>
           </head>

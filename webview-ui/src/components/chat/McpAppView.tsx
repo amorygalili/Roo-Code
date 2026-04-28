@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, memo } from "react"
+import { useCallback, useEffect, useMemo, useRef, memo } from "react"
 import { useEvent } from "react-use"
 import type { ExtensionMessage } from "@roo-code/types"
 
@@ -42,6 +42,29 @@ const McpAppViewInternal = ({
 	// Map of requestId → resolver for pending proxied MCP calls
 	const pendingRef = useRef<Map<string, PendingResolver>>(new Map())
 	const initializedRef = useRef(false)
+
+	// Inject the parent webview's CSP nonce into every <script> element so that
+	// VS Code's strict 'strict-dynamic' policy allows them to execute.  The
+	// srcdoc iframe inherits the parent page's Content-Security-Policy, which
+	// blocks inline scripts unless they carry the correct nonce.  The nonce is
+	// exposed as window.WEBVIEW_NONCE by the extension host at startup.
+	//
+	// We use DOMParser rather than a regex so that only real <script> elements
+	// receive the nonce.  A regex would also match occurrences of "<script>"
+	// inside JavaScript string literals (e.g. in bundled app code), which can
+	// inject the nonce inside a JS string and produce a SyntaxError at runtime.
+	const processedHtml = useMemo(() => {
+		const nonce = (window as Window & { WEBVIEW_NONCE?: string }).WEBVIEW_NONCE
+		if (!nonce) return html
+		const parser = new DOMParser()
+		const doc = parser.parseFromString(html, "text/html")
+		doc.querySelectorAll("script").forEach((script) => {
+			if (!script.hasAttribute("nonce")) {
+				script.setAttribute("nonce", nonce)
+			}
+		})
+		return "<!DOCTYPE html>\n" + doc.documentElement.outerHTML
+	}, [html])
 
 	// ── Helper: send a JSON-RPC message into the iframe ──────────────────────
 	const sendToIframe = useCallback((msg: unknown) => {
@@ -217,7 +240,7 @@ const McpAppViewInternal = ({
 	return (
 		<iframe
 			ref={iframeRef}
-			srcDoc={html}
+			srcDoc={processedHtml}
 			sandbox="allow-scripts"
 			style={{
 				width: "100%",

@@ -59,12 +59,17 @@ export class UseMcpToolTool extends BaseTool<"use_mcp_tool"> {
 				arguments: params.arguments ? JSON.stringify(params.arguments) : undefined,
 			} satisfies ClineAskUseMcpServer)
 
-			const executionId = task.lastMessageTs?.toString() ?? Date.now().toString()
 			const didApprove = await askApproval("use_mcp_server", completeMessage)
 
 			if (!didApprove) {
 				return
 			}
+
+			// Capture executionId AFTER askApproval so that task.lastMessageTs reflects
+			// the actual use_mcp_server ask message timestamp. Capturing before askApproval
+			// would give the previous message's timestamp, which wouldn't match the
+			// executionId={message.ts} that McpExecution receives in the webview.
+			const executionId = task.lastMessageTs?.toString() ?? Date.now().toString()
 
 			// Execute the tool and process results
 			await this.executeToolAndProcessResult(
@@ -388,8 +393,22 @@ export class UseMcpToolTool extends BaseTool<"use_mcp_tool"> {
 				},
 			})
 		} catch (error) {
-			// Non-fatal: failing to render the MCP App UI doesn't break the tool result
-			console.error("Failed to fetch MCP App HTML for tool", toolName, error)
+			// Non-fatal: failing to render the MCP App UI doesn't break the tool result.
+			// Common causes: server did not register the ui:// resource, URI mismatch,
+			// or network/transport error reading the resource.
+			console.error(
+				`[MCP Apps] Failed to fetch HTML for tool "${toolName}" on server "${serverName}".`,
+				`executionId=${executionId}, uiResourceUri=${
+					task.providerRef
+						.deref()
+						?.getMcpHub()
+						?.getServers()
+						?.find((s) => s.name === serverName)
+						?.tools?.find((t) => t.name === toolName)?.uiResourceUri ??
+					"(not set — _meta.ui.resourceUri missing from tools/list)"
+				}`,
+				error,
+			)
 		}
 	}
 }
